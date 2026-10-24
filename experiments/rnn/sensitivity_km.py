@@ -34,6 +34,19 @@ which it trains in the opposite direction.
               dw_ij = -lr(t) * (1 + alpha_ij) * g_local,ij,
           lr(t) = exponential_decay(--lr-sgd, 2000, 1/e); alpha is the
           raw-gradient fit (lowrank_fit_km.json), the right fit for SGD.
+  betac   the neuron-specific, synapse-independent rule from the notes:
+              dw_ij = -lr(t) * (1 + beta_i) * AdaBelief(g_local)_ij,
+          AdaBelief normalises the plain local gradient first and the factor
+          multiplies the normalised update, so it is not cancelled; beta_i
+          from fit_beta.py (beta_fit_km.json).
+  betat   the same with a time-dependent factor (1 + beta_i(t)): beta_i fitted
+          on successive windows of the published exact run (fit_beta.py
+          "schedule") and interpolated in log(trial) between window midpoints.
+  matpre  per-neuron synapse-mixing matrix (fit_matrix.py, "A_per_neuron"):
+          each target row of the local gradient is multiplied by its own
+          (I + A^(i)) and the result is passed to AdaBelief.
+  matpost the same matrix applied after AdaBelief's normalisation:
+          dw = -lr(t) * AdaBelief(g_local) (I + A^(i)).
   localsgd  the local rule (alpha = 0) with the same plain SGD and learning
           rate, so it differs from rank1sgd only by the (1 + alpha) factor.
   feedback  learning-signal rule (fit_feedback.py): local term plus
@@ -66,7 +79,8 @@ from train_lowrank import net_to_w
 from train_noisy import jitter
 
 DATA = "sensitivity_km.npz"
-RULES = ["exact", "local", "rank1", "rank1c", "rank2c", "rank1sgd", "localsgd", "feedback"]
+RULES = ["exact", "local", "rank1", "rank1c", "rank2c", "rank1sgd", "localsgd", "betac",
+         "betat", "matpre", "matpost", "feedback"]
 
 
 def build(args):
@@ -98,7 +112,23 @@ def build(args):
     grads = {"exact": lambda p, s: jax.grad(loss_on)(p, s),
              "local": rule(jnp.ones_like(alpha)), "rank1": rule(1.0 + alpha),
              "rank1c": rule(jnp.ones_like(alpha)), "rank2c": rule(jnp.ones_like(alpha)),
-             "rank1sgd": rule(1.0 + alpha), "localsgd": rule(jnp.ones_like(alpha))}
+             "rank1sgd": rule(1.0 + alpha), "localsgd": rule(jnp.ones_like(alpha)),
+             "betac": rule(jnp.ones_like(alpha)), "betat": rule(jnp.ones_like(alpha)),
+             "matpost": rule(jnp.ones_like(alpha))}
+    if any(r in args.rules for r in ("matpre", "matpost")):
+        N = trial["w0"].shape[0]
+        Mix = jnp.eye(N)[None] + jnp.asarray(json.load(open(args.A_fit))["A_per_neuron"])
+        OFF = jnp.array([[j for j in range(N) if j != i] for i in range(N)])
+
+        def mix(gw):
+            """Multiply each row of a (N, N-1) weight array by its own (I + A^(i))."""
+            out = jnp.einsum("ij,ijk->ik", ex.w_to_weights_net(gw), Mix)
+            return jnp.take_along_axis(out, OFF, axis=1)
+
+        def matpre(p, s):
+            _, (gw, gx) = trace(p[0], p[1], s)
+            return mix(gw), gx
+        grads["matpre"] = matpre
     if "feedback" in args.rules:
         from fit_feedback import make_rule as make_feedback
         fb = make_feedback(neuron, trial, json.load(open(args.fb_fit))["B"])
@@ -120,6 +150,33 @@ def build(args):
     optims["rank1sgd"] = optax.sgd(
         optax.exponential_decay(args.lr_sgd, args.decay_steps, 1 / jnp.e))
     optims["localsgd"] = optims["rank1sgd"]
+    if "betac" in args.rules:
+        beta = jnp.asarray(json.load(open(args.beta_fit))["beta"])
+        # one factor per postsynaptic neuron, shared by all of its input synapses
+        optims["betac"] = corrected((1.0 + beta)[:, None] * jnp.ones_like(trial["w0"]))
+    if "matpost" in args.rules:
+        optims["matpost"] = optax.chain(
+            optax.scale_by_belief(),
+            optax.stateless(lambda u, params=None: (mix(u[0]), u[1])),
+            optax.scale_by_learning_rate(sched))
+    if "betat" in args.rules:
+        sch = json.load(open(args.beta_fit))["schedule"]
+        xk = jnp.log1p(jnp.asarray(sch["knots"]))
+        fk = 1.0 + jnp.asarray(sch["beta"])               # (windows, N)
+
+        def by_trial():
+            """Multiply neuron i's normalised update by 1 + beta_i(trial)."""
+            def init(params):
+                return jnp.zeros([], jnp.int32)
+
+            def update(u, count, params=None):
+                x = jnp.log1p(count.astype(fk.dtype))
+                f = jax.vmap(lambda col: jnp.interp(x, xk, col), in_axes=1)(fk)   # (N,)
+                return (u[0] * f[:, None], u[1]), count + 1
+            return optax.GradientTransformation(init, update)
+
+        optims["betat"] = optax.chain(optax.scale_by_belief(), by_trial(),
+                                      optax.scale_by_learning_rate(sched))
     return trial, loss_on, grads, optims
 
 
@@ -217,14 +274,20 @@ def stage_plot(args):
     pos = [s for s in sig if s > 0]
     col = {float(s): (INK if s == 0 else ramp[pos.index(s)]) for s in sig}
     rule_style = {"exact": dict(color=INK, marker="o", label="exact"),
-                  "local": dict(color="#2a78d6", marker="s", label="local (α = 0)"),
+                  "local": dict(color="#2a78d6", marker="s", label="local"),
                   "rank1": dict(color="#eb6834", marker="^", label="rank-1 (inside AdaBelief)"),
                   "rank1c": dict(color="#eb6834", marker="^", label="rank-1"),
                   "rank2c": dict(color="#1baf7a", marker="D", label="rank-2"),
                   "rank1sgd": dict(color="#1baf7a", marker="D", label="rank-1, plain SGD"),
                   "localsgd": dict(color="#6250d6", marker="v", label="local, plain SGD"),
+                  "betac": dict(color="#eb6834", marker="^", label="constant β"),
+                  "betat": dict(color="#1baf7a", marker="D", label="β(t)"),
+                  "matpre": dict(color="#eb6834", marker="v", label="local + matrix A"),
+                  "matpost": dict(color="#e87ba4", marker="P", label="matrix A, after AdaBelief"),
                   "feedback": dict(color="#6250d6", marker="v", label="learning signal (B)")}
-    names = {"exact": "exact gradient", "local": "local (α = 0)",
+    names = {"exact": "exact gradient", "local": "local gradient", "betac": "constant β",
+             "betat": "β(t)", "matpre": "local + matrix A",
+             "matpost": "A, after AdaBelief",
              "rank1": "rank-1, α inside AdaBelief", "rank1c": "rank-1 rule",
              "rank2c": "rank-2 rule", "rank1sgd": "rank-1, SGD",
              "localsgd": "local, SGD",
@@ -260,7 +323,7 @@ def stage_plot(args):
                     lw=1.6 if s == 0 else 1.3, label=f"σ = {s:g}")
         ax.set_xscale("symlog", linthresh=rec); ax.set_yscale("log")
         ax.set_ylim(lo * 0.8, hi * 1.2)
-        ax.set_title(f"{'A' if c == 0 else ' '}   {names[r]}: loss on clean inputs",
+        ax.set_title(f"{'A' if c == 0 else ' '}   {names[r]}: loss",
                      loc="left", fontsize=9.5)
         ax.set_xlabel("trial"); ax.grid(alpha=0.3, lw=0.5, axis="y")
         if c == 0:
@@ -280,7 +343,7 @@ def stage_plot(args):
                     label=f"σ = {s:g}")
         ax.set_xscale("symlog", linthresh=rec); ax.set_yscale("log")
         ax.set_ylim(dpos, dmax * 1.5)
-        ax.set_title(f"{'B' if c == 0 else ' '}   {names[r]}: drift from noiseless run",
+        ax.set_title(f"{'B' if c == 0 else ' '}   {names[r]}: drift",
                      loc="left", fontsize=9.5)
         ax.set_xlabel("trial"); ax.grid(alpha=0.3, lw=0.5, axis="y")
         if c == 0:
@@ -311,7 +374,9 @@ def stage_plot(args):
             ax.set_yscale("log")
         ax.set_title(title, loc="left", fontsize=9.5)
         ax.grid(alpha=0.3, lw=0.5, axis="y")
-        ax.legend(frameon=False, fontsize=7)
+        if row == 1:   # one legend for both summary panels, below them
+            ax.legend(frameon=False, fontsize=7.5, loc="upper center",
+                      bbox_to_anchor=(0.5, -0.2), ncol=2)
 
     opt = ("AdaBelief" if not any(r.endswith("sgd") for r in rules)
            else "AdaBelief unless marked SGD")
@@ -340,6 +405,8 @@ def main():
                     choices=RULES)
     ap.add_argument("--fit", default="lowrank_fit_km.json")
     ap.add_argument("--fb-fit", default="feedback_fit.json")
+    ap.add_argument("--beta-fit", default="beta_fit_km.json")
+    ap.add_argument("--A-fit", dest="A_fit", default="A_fit_km.json")
     ap.add_argument("--lr-sgd", type=float, default=3.0,
                     help="initial SGD learning rate for rank1sgd")
     ap.add_argument("--out", default="sensitivity_km.png")
