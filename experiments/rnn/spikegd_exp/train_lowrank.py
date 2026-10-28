@@ -22,10 +22,12 @@ Usage (from experiments/rnn/, after `python lowrank.py collect && fit`):
 """
 
 import argparse
+
+from experiments.rnn.spikegd_exp.experiment import data_path, figure_path
 import json
 import time
 
-from experiments.rnn.Spike_Experiments import experiment as ex
+from experiments.rnn.spikegd_exp import experiment as ex
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -49,15 +51,15 @@ def main():
     ap.add_argument("--w-scale", type=float, default=3.0)
     ap.add_argument("--trials", type=int, default=400)
     ap.add_argument("--lr", type=float, default=1e-2)
-    ap.add_argument("--fit", default="lowrank_fit.json")
+    ap.add_argument("--fit", type=data_path, default="lowrank_fit.json")
     ap.add_argument("--rules", nargs="+", default=["exact", "local", "rank1"],
                     choices=["exact", "local", "rank1"])
     ap.add_argument("--optim", default="adabelief", choices=["adabelief", "sgd"])
     ap.add_argument("--timing-reps", type=int, default=20)
-    ap.add_argument("--out", default=None)
+    ap.add_argument("--out", type=figure_path, default=None)
     args = ap.parse_args()
     tag = "" if args.optim == "adabelief" else f"_{args.optim}"
-    args.out = args.out or f"train_lowrank{tag}.png"
+    args.out = figure_path(args.out or f"train_lowrank{tag}.png")
     global OUT
     OUT = f"train_lowrank{tag}.json"
 
@@ -69,7 +71,7 @@ def main():
     ones = jnp.ones_like(trial["w0"])
     one = jnp.array(1.0)
     full = ex.make_full_loss(neuron, trial, ones)
-    alpha = jnp.asarray(net_to_w(np.array(json.load(open(args.fit))["alpha_rank1"])))
+    alpha = jnp.asarray(net_to_w(np.array(json.load(open(data_path(args.fit)))["alpha_rank1"])))
 
     def exact_grad(p):
         return jax.value_and_grad(lambda q: full(q[0], q[1], one))(p)
@@ -144,7 +146,7 @@ def main():
     results["events"] = {"input": n_in, "network": n_net, "buffer": int(times.shape[0])}
     print(f"\n  events per trial: {n_in} input + {n_net} network spikes "
           f"(simulation buffer {times.shape[0]})")
-    json.dump(results, open(OUT, "w"), indent=1)
+    json.dump(results, open(data_path(OUT), "w"), indent=1)
 
     # --- figure ---------------------------------------------------------------
     import matplotlib
@@ -179,7 +181,7 @@ def main():
     a2.set_xlabel("wall-clock per gradient (CPU, jitted)")
     a2.set_title("B   cost in this implementation", loc="left", fontsize=9.5)
     fig.tight_layout()
-    fig.savefig(args.out, dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
+    fig.savefig(figure_path(args.out), dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
     print(f"  figure -> {args.out}, results -> {OUT}")
 
 

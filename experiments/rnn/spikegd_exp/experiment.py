@@ -37,6 +37,8 @@ Requires spikegd on PYTHONPATH and must be run from experiments/rnn/.
 """
 
 import argparse
+
+from pathlib import Path
 import json
 import os
 import pickle
@@ -51,8 +53,34 @@ import numpy as np  # noqa: E402
 import optax  # noqa: E402
 from jax import grad, random  # noqa: E402
 
-from rnn import init_input, init_target, init_weights, outfn  # noqa: E402
+from experiments.rnn.rnn import init_input, init_target, init_weights, outfn  # noqa: E402
 from spikegd.qif import QIFNeuron  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent
+DATA_DIR = ROOT / "data"
+FIG_DIR = ROOT / "fig"
+
+
+def _artifact_path(filename, directory):
+    path = Path(filename)
+    if not path.is_absolute():
+        # Accept both bare names and paths already prefixed with data/ or fig/.
+        if path.parts and path.parts[0] in {"data", "fig"}:
+            path = Path(*path.parts[1:])
+        path = directory / path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+def data_path(filename):
+    """Resolve a data filename relative to this experiment's data directory."""
+    return _artifact_path(filename, DATA_DIR)
+
+
+def figure_path(filename):
+    """Resolve a figure filename relative to this experiment's fig directory."""
+    return _artifact_path(filename, FIG_DIR)
+
 
 # Published config from rnn.ipynb.
 BASE_CONFIG = {
@@ -319,7 +347,7 @@ def stage_train(args):
         trace.append((t + 1, float(loss), float(jnp.linalg.norm(g_k))))
 
     pickle.dump({"snaps": snaps, "trace": trace, "args": vars(args)},
-                open(SNAPS, "wb"))
+                open(data_path(SNAPS), "wb"))
     print(f"trained {args.trials} steps in {time.time() - t0:.1f}s")
     for s, _, _, l in snaps:
         print(f"  step {s:5d}   loss {l:.5e}")
@@ -331,11 +359,11 @@ def stage_decompose(args):
     cfg["seed"] = args.seed
     neuron = QIFNeuron(cfg["tau"], cfg["eps"], cfg["alpha"])
     trial = make_trial(cfg, args.ntar, args.w_scale)
-    snaps = pickle.load(open(SNAPS, "rb"))["snaps"]
+    snaps = pickle.load(open(data_path(SNAPS), "rb"))["snaps"]
     mask = (sink_mask(cfg["N"], args.k) if args.arch == "sink"
             else acyclic_mask(cfg["N"], args.k, range(args.k + 1, args.k + 1 + args.n_down)))
 
-    out = json.load(open(DECOMP)) if os.path.exists(DECOMP) else {}
+    out = json.load(open(data_path(DECOMP))) if os.path.exists(data_path(DECOMP)) else {}
     for eps in args.eps:
         t0 = time.time()
         rows = []
@@ -346,7 +374,7 @@ def stage_decompose(args):
         out[f"{args.arch}:{eps}"] = rows
         print(f"  eps {eps:<5} {time.time() - t0:5.1f}s   "
               + "  ".join(f"{r['step']}:{r['rho_pct']:.2f}%" for r in rows))
-    json.dump(out, open(DECOMP, "w"))
+    json.dump(out, open(data_path(DECOMP), "w"))
 
 
 def stage_partitions(args):
@@ -356,12 +384,12 @@ def stage_partitions(args):
     N, k = cfg["N"], args.k
     neuron = QIFNeuron(cfg["tau"], cfg["eps"], cfg["alpha"])
     trial = make_trial(cfg, 2, args.w_scale)   # Ntar=2 so a loss neuron can be in D
-    snaps = {s: (w, x) for s, w, x, _ in pickle.load(open(SNAPS, "rb"))["snaps"]}
+    snaps = {s: (w, x) for s, w, x, _ in pickle.load(open(data_path(SNAPS), "rb"))["snaps"]}
     last = max(snaps)
 
     rng = np.random.default_rng(args.part_seed)
     pool = [i for i in range(N) if i != k and i != 1]
-    out = json.load(open(PARTS)) if os.path.exists(PARTS) else []
+    out = json.load(open(data_path(PARTS))) if os.path.exists(data_path(PARTS)) else []
     for label, (w, x0) in [("init", snaps[0]), (f"trained({last})", snaps[last])]:
         for _ in range(args.n_partitions):
             # neuron 1 is the extra loss neuron and is always downstream, so a
@@ -375,7 +403,7 @@ def stage_partitions(args):
         v = [r["rho_pct"] for r in out if r["weights"] == label]
         print(f"  {label:<14} min {min(v):6.3f}%   median "
               f"{float(np.median(v)):6.3f}%   max {max(v):7.3f}%")
-    json.dump(out, open(PARTS, "w"))
+    json.dump(out, open(data_path(PARTS), "w"))
 
 
 def stage_figure(args):
@@ -383,8 +411,8 @@ def stage_figure(args):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    dec = json.load(open(DECOMP))
-    part = json.load(open(PARTS))
+    dec = json.load(open(data_path(DECOMP)))
+    part = json.load(open(data_path(PARTS)))
 
     def curves(arch):
         """{eps: rows} for one architecture, sorted by eps."""
@@ -457,7 +485,7 @@ def stage_figure(args):
     ax.grid(alpha=0.3, lw=0.5, axis="y")
 
     fig.tight_layout()
-    fig.savefig(args.out, dpi=160, bbox_inches="tight")
+    fig.savefig(figure_path(args.out), dpi=160, bbox_inches="tight")
     print(f"figure written to {args.out}")
 
 
@@ -537,7 +565,7 @@ def stage_converge(args):
             print(f"  {m['step']:6d} {m['train_loss']:11.4e} | "
                   f"{m['norm_exact']:10.3e} {m['norm_nonlocal']:11.3e} "
                   f"{m['rho_pct']:7.3f}% {m['cos']:10.6f} {m['Kout']:5d}")
-    json.dump(out, open("converge.json", "w"))
+    json.dump(out, open(data_path("converge.json"), "w"))
 
 
 def spike_trains(neuron, trial, w, x0, mask, eps):
@@ -642,7 +670,7 @@ def stage_retrain(args):
                      for r in rows if r["neuron"] in D)
         print(f"    U identical to intact: {same_U}     "
               f"D identical to intact: {same_D}\n")
-    json.dump(out, open("retrain.json", "w"))
+    json.dump(out, open(data_path("retrain.json"), "w"))
 
 
 # ===========================================================================
@@ -667,7 +695,7 @@ def main():
                     default=[0.0, 0.25, 0.5, 1.0])
     ap.add_argument("--n-partitions", type=int, default=6)
     ap.add_argument("--part-seed", type=int, default=0)
-    ap.add_argument("--out", default="main_figure.png")
+    ap.add_argument("--out", type=figure_path, default="main_figure.png")
     ap.add_argument("--conds", nargs="+", default=["sink", "acyclic"],
                     choices=["sink", "acyclic"])
     args = ap.parse_args()

@@ -18,28 +18,23 @@ Usage (from experiments/spikegd_exp/, after sensitivity_km.py run):
     python cosine_km.py --plot-only
 """
 
-if __package__:
-    from ._paths import data_path
-else:
-    from _paths import data_path
 
 import argparse
+from experiments.rnn.spikegd_exp.experiment import data_path, figure_path
 import json
 import time
-
 from experiments.rnn.spikegd_exp import experiment as ex
 import jax
 import jax.numpy as jnp
 import numpy as np
 from spikegd.qif import QIFNeuron
-
 from experiments.rnn.spikegd_exp.fastgrad import make_fast_grad
 
-OUT = data_path("cosine_km.npz")
+OUT = "data/cosine_km.npz"
 
 
 def compute(args):
-    d = np.load(args.data)
+    d = np.load(data_path(args.data))
     sig = d["sigmas"]
     meta = json.loads(str(d["args"]))
     rec = meta["record"]
@@ -49,7 +44,7 @@ def compute(args):
     trial = ex.make_trial(cfg, ntar, 0.0)
     ones = jnp.ones_like(trial["w0"]); one = jnp.array(1.0)
     full = ex.make_full_loss(neuron, trial, ones)
-    fit = json.load(open(args.fit))
+    fit = json.load(open(data_path(args.fit)))
     rules = {
         "local": make_fast_grad(neuron, trial, ntar, "trace"),
         "matkc": make_fast_grad(neuron, trial, ntar, "trace",
@@ -82,7 +77,7 @@ def compute(args):
                 res[s, 1:] = res[s, 0]
         out[r] = res
         print(f"  {r}: done ({time.time() - t0:.0f}s)", flush=True)
-    np.savez(OUT, **out)
+    np.savez(data_path(OUT), **out)
     print(f"  -> {OUT}")
 
 
@@ -91,7 +86,7 @@ def plot(args):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    d = np.load(OUT)
+    d = np.load(data_path(OUT))
     sig, trials = d["sigmas"], d["trials"]
     INK, MUTED, GRID = "#0b0b0b", "#52514e", "#b5b4ad"
     ramp = ["#86b6ef", "#3987e5", "#1c5cab", "#0d366b"]
@@ -137,16 +132,16 @@ def plot(args):
     fig.suptitle("Alignment of the update with the exact gradient along each rule's own training "
                  "(clean inputs; median ± interquartile range over 20 noise seeds)",
                  x=0.01, ha="left", fontsize=10.5)
-    fig.savefig(args.out, dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
+    fig.savefig(figure_path(args.out), dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
     print(f"  figure -> {args.out}")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--data", default=data_path("sensitivity_km.npz"))
-    ap.add_argument("--fit", default=data_path("spike_AC_fit_km.json"))
+    ap.add_argument("--data", type=data_path, default="data/sensitivity_km.npz")
+    ap.add_argument("--fit", type=data_path, default="data/spike_AC_fit_km.json")
     ap.add_argument("--every", type=int, default=250, help="trials between evaluations")
-    ap.add_argument("--out", default=data_path("sensitivity_km_Akc_cosine.png"))
+    ap.add_argument("--out", type=figure_path, default="sensitivity_km_Akc_cosine.png")
     ap.add_argument("--plot-only", action="store_true")
     args = ap.parse_args()
     if not args.plot_only:

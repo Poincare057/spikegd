@@ -27,8 +27,8 @@ Usage (from experiments/rnn/, after `lowrank.py collect --w-scale 0 --trials
 """
 
 import argparse
+from experiments.rnn.spikegd_exp.experiment import data_path
 import json
-
 import numpy as np
 
 
@@ -42,14 +42,14 @@ def predict(G, A):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--data", default="lowrank_data_km.npz")
-    ap.add_argument("--out", default="A_fit_km.json")
+    ap.add_argument("--data", type=data_path, default="lowrank_data_km.npz")
+    ap.add_argument("--out", type=data_path, default="A_fit_km.json")
     ap.add_argument("--block", type=int, default=500)
     ap.add_argument("--ridge", type=float, default=1e-6,
                     help="ridge, relative to the mean diagonal of the normal matrix")
     args = ap.parse_args()
 
-    d = np.load(args.data)
+    d = np.load(data_path(args.data))
     E, G, ntar = d["exact"], d["local"], int(d["ntar"])
     T, N, _ = E.shape
     tar = list(range(ntar))
@@ -96,7 +96,7 @@ def main():
 
     models = {"local (A = 0)": G}
     try:   # optional comparison with the constant-beta fit, if it has been made
-        beta = np.array(json.load(open("beta_fit_km.json"))["beta"])
+        beta = np.array(json.load(open(data_path("beta_fit_km.json")))["beta"])
         models["constant beta"] = G * (1 + beta)[None, :, None]
     except FileNotFoundError:
         pass
@@ -116,7 +116,7 @@ def main():
     json.dump({"A": A.tolist(), "A_per_neuron": A_i.tolist(),
                "fitted_on": f"{args.data}: weighted LS; 'A' shared over targets, "
                             f"'A_per_neuron'[i] fitted on target i's rows only"},
-              open(args.out, "w"), indent=1)
+              open(data_path(args.out), "w"), indent=1)
     print(f"  -> {args.out}")
 
 

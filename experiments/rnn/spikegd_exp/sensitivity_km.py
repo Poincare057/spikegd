@@ -69,10 +69,12 @@ Usage (from experiments/rnn/):
 """
 
 import argparse
+
+from experiments.rnn.spikegd_exp.experiment import data_path, figure_path
 import json
 import time
 
-from experiments.rnn.Spike_Experiments import experiment as ex
+from experiments.rnn.spikegd_exp import experiment as ex
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -80,7 +82,7 @@ import optax
 from jax import lax, random
 from spikegd.qif import QIFNeuron
 
-from experiments.rnn.Spike_Experiments.fastgrad import make_fast_grad
+from experiments.rnn.spikegd_exp.fastgrad import make_fast_grad
 from train_lowrank import net_to_w
 from train_noisy import jitter
 
@@ -98,7 +100,7 @@ def build(args):
     # alpha is only needed by the rank-1 / rank-2 rules; exact and local runs
     # must not depend on the fit file existing
     if any(r in args.rules for r in ("rank1", "rank1c", "rank2c", "rank1sgd")):
-        fit = json.load(open(args.fit))
+        fit = json.load(open(data_path(args.fit)))
         alpha = jnp.asarray(net_to_w(np.array(fit["alpha_rank1"])))
         alpha2 = jnp.asarray(net_to_w(np.array(fit["alpha_full"])))
     else:
@@ -123,7 +125,7 @@ def build(args):
              "matpost": rule(jnp.ones_like(alpha))}
     if any(r in args.rules for r in ("matpre", "matpost")):
         N = trial["w0"].shape[0]
-        Mix = jnp.eye(N)[None] + jnp.asarray(json.load(open(args.A_fit))["A_per_neuron"])
+        Mix = jnp.eye(N)[None] + jnp.asarray(json.load(open(data_path(args.A_fit)))["A_per_neuron"])
         OFF = jnp.array([[j for j in range(N) if j != i] for i in range(N)])
 
         def mix(gw):
@@ -138,13 +140,13 @@ def build(args):
     if "matk" in args.rules:
         spike_trace = make_fast_grad(
             neuron, trial, trial["cfg"]["Ntar"], "trace",
-            spike_mix=np.array(json.load(open(args.spike_A_fit))["spike_mix"]))
+            spike_mix=np.array(json.load(open(data_path(args.spike_A_fit)))["spike_mix"]))
 
         def matk(p, s):
             return spike_trace(p[0], p[1], s)[1]
         grads["matk"] = matk
     if "matkc" in args.rules:
-        fit_c = json.load(open(args.spike_AC_fit))
+        fit_c = json.load(open(data_path(args.spike_AC_fit)))
         cross_trace = make_fast_grad(
             neuron, trial, trial["cfg"]["Ntar"], "trace",
             spike_mix=np.array(fit_c["spike_mix"]), cross=np.array(fit_c["cross"]))
@@ -154,7 +156,7 @@ def build(args):
         grads["matkc"] = matkc
     if "feedback" in args.rules:
         from fit_feedback import make_rule as make_feedback
-        fb = make_feedback(neuron, trial, json.load(open(args.fb_fit))["B"])
+        fb = make_feedback(neuron, trial, json.load(open(data_path(args.fb_fit)))["B"])
         grads["feedback"] = lambda p, s: fb(p[0], p[1], s)
     sched = optax.exponential_decay(args.lr, args.decay_steps, 1 / jnp.e)
     adabelief = optax.adabelief(sched)
@@ -174,7 +176,7 @@ def build(args):
         optax.exponential_decay(args.lr_sgd, args.decay_steps, 1 / jnp.e))
     optims["localsgd"] = optims["rank1sgd"]
     if "betac" in args.rules:
-        beta = jnp.asarray(json.load(open(args.beta_fit))["beta"])
+        beta = jnp.asarray(json.load(open(data_path(args.beta_fit)))["beta"])
         # one factor per postsynaptic neuron, shared by all of its input synapses
         optims["betac"] = corrected((1.0 + beta)[:, None] * jnp.ones_like(trial["w0"]))
     if "matpost" in args.rules:
@@ -183,7 +185,7 @@ def build(args):
             optax.stateless(lambda u, params=None: (mix(u[0]), u[1])),
             optax.scale_by_learning_rate(sched))
     if "betat" in args.rules:
-        sch = json.load(open(args.beta_fit))["schedule"]
+        sch = json.load(open(data_path(args.beta_fit)))["schedule"]
         xk = jnp.log1p(jnp.asarray(sch["knots"]))
         fk = 1.0 + jnp.asarray(sch["beta"])               # (windows, N)
 
@@ -241,7 +243,7 @@ def stage_run(args):
     # keep results of rules not being rerun
     out = {}
     try:
-        old = np.load(DATA)
+        old = np.load(data_path(DATA))
         if np.array_equal(old["sigmas"], np.array(sig)):
             out = {k: old[k] for k in old.files
                    if k not in ("sigmas", "args") and k.split("_")[0] not in args.rules}
@@ -278,7 +280,7 @@ def stage_run(args):
                   f"{np.median(CL[si, :, -1]):.4f}  held-out noisy median "
                   f"{np.median(HO[si]):.4f}", flush=True)
         print(f"  {rule} done ({time.time() - t_start:.0f}s)", flush=True)
-        np.savez(DATA, sigmas=np.array(sig), args=json.dumps(vars(args)), **out)
+        np.savez(data_path(DATA), sigmas=np.array(sig), args=json.dumps(vars(args)), **out)
     print(f"  -> {DATA}")
 
 
@@ -287,7 +289,7 @@ def stage_plot(args):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    d = np.load(DATA)
+    d = np.load(data_path(DATA))
     sig = d["sigmas"]
     meta = json.loads(str(d["args"]))
     rules = [r for r in args.plot_rules if f"{r}_clean" in d]
@@ -410,7 +412,7 @@ def stage_plot(args):
                  f"({opt}, {meta['trials']:,} trials, zero init; median ± "
                  f"interquartile range over {R} noise seeds)",
                  x=0.01, ha="left", fontsize=10.5)
-    fig.savefig(args.out, dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
+    fig.savefig(figure_path(args.out), dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
     print(f"  figure -> {args.out}")
 
     if args.separate:
@@ -433,7 +435,7 @@ def stage_plot(args):
             if title is not None:
                 title.set_visible(False)
             path = f"{stem}_{name}.png"
-            fig.savefig(path, dpi=200, bbox_inches=bb, facecolor="#fcfcfb")
+            fig.savefig(figure_path(path), dpi=200, bbox_inches=bb, facecolor="#fcfcfb")
             print(f"  part   -> {path}")
         for a in axes.flat:
             a.set_visible(True)
@@ -457,17 +459,17 @@ def main():
     ap.add_argument("--plot-rules", nargs="+",
                     default=["exact", "local", "rank1c", "localsgd", "rank1sgd"],
                     choices=RULES)
-    ap.add_argument("--fit", default="lowrank_fit_km.json")
-    ap.add_argument("--fb-fit", default="feedback_fit.json")
+    ap.add_argument("--fit", type=data_path, default="lowrank_fit_km.json")
+    ap.add_argument("--fb-fit", type=data_path, default="feedback_fit.json")
     ap.add_argument("--separate", action="store_true",
                     help="plot: also save each part of the figure as its own image")
-    ap.add_argument("--beta-fit", default="beta_fit_km.json")
-    ap.add_argument("--A-fit", dest="A_fit", default="A_fit_km.json")
-    ap.add_argument("--spike-A-fit", dest="spike_A_fit", default="spike_A_fit_km.json")
-    ap.add_argument("--spike-AC-fit", dest="spike_AC_fit", default="spike_AC_fit_km.json")
+    ap.add_argument("--beta-fit", type=data_path, default="beta_fit_km.json")
+    ap.add_argument("--A-fit", type=data_path, dest="A_fit", default="A_fit_km.json")
+    ap.add_argument("--spike-A-fit", type=data_path, dest="spike_A_fit", default="spike_A_fit_km.json")
+    ap.add_argument("--spike-AC-fit", type=data_path, dest="spike_AC_fit", default="spike_AC_fit_km.json")
     ap.add_argument("--lr-sgd", type=float, default=3.0,
                     help="initial SGD learning rate for rank1sgd")
-    ap.add_argument("--out", default="sensitivity_km.png")
+    ap.add_argument("--out", type=figure_path, default="sensitivity_km.png")
     args = ap.parse_args()
     {"run": stage_run, "plot": stage_plot}[args.stage](args)
 

@@ -24,10 +24,12 @@ Usage (from experiments/rnn/):
 """
 
 import argparse
+
+from experiments.rnn.spikegd_exp.experiment import data_path, figure_path
 import json
 import time
 
-from experiments.rnn.Spike_Experiments import experiment as ex
+from experiments.rnn.spikegd_exp import experiment as ex
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -61,8 +63,8 @@ def main():
     ap.add_argument("--lr", type=float, default=0.5)
     ap.add_argument("--sigmas", type=float, nargs="+", default=[0.0, 0.05, 0.1, 0.2])
     ap.add_argument("--n-eval", type=int, default=50)
-    ap.add_argument("--fit", default="lowrank_fit.json")
-    ap.add_argument("--out", default="train_noisy.png")
+    ap.add_argument("--fit", type=data_path, default="lowrank_fit.json")
+    ap.add_argument("--out", type=figure_path, default="train_noisy.png")
     args = ap.parse_args()
 
     cfg = dict(ex.BASE_CONFIG)
@@ -72,7 +74,7 @@ def main():
     trial = ex.make_trial(cfg, ntar, args.w_scale)
     ones = jnp.ones_like(trial["w0"])
     one = jnp.array(1.0)
-    alpha = jnp.asarray(net_to_w(np.array(json.load(open(args.fit))["alpha_rank1"])))
+    alpha = jnp.asarray(net_to_w(np.array(json.load(open(data_path(args.fit)))["alpha_rank1"])))
     scales = {"local": jnp.ones_like(alpha), "rank1": 1.0 + alpha}
 
     def loss_on(p, spikes):
@@ -134,7 +136,7 @@ def main():
             print(f"  sigma {sigma:<5g} {rule:<6} clean final {clean[-1]:.4f}   "
                   f"held-out noisy {run['heldout_noisy_mean']:.4f} "
                   f"± {run['heldout_noisy_sem']:.4f}   ({run['seconds']:.0f}s)", flush=True)
-    json.dump(results, open(OUT, "w"), indent=1)
+    json.dump(results, open(data_path(OUT), "w"), indent=1)
 
     # --- figure ---------------------------------------------------------------
     import matplotlib
@@ -181,7 +183,7 @@ def main():
     fig.suptitle(f"Training under input spike-time jitter  ({args.optim}, lr {args.lr:g})",
                  x=0.01, ha="left", fontsize=10.5)
     fig.tight_layout()
-    fig.savefig(args.out, dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
+    fig.savefig(figure_path(args.out), dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
     print(f"  figure -> {args.out}, results -> {OUT}")
 
 

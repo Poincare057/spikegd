@@ -14,7 +14,7 @@ import jax, jax.numpy as jnp
 import paper_forms as P, rtrl_paper as R, sg
 from r1_sim import r1_outputs
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'figs'))
-from qif_events import qr_accumulate
+from spikegd.qif_code.figs.qif_events import qr_accumulate
 mp.mp.dps = 50
 rng = np.random.default_rng(2026)
 REC = []

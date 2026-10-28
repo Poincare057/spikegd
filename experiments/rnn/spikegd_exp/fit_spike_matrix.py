@@ -36,18 +36,17 @@ Usage (from experiments/rnn/):
 """
 
 import argparse
+from experiments.rnn.spikegd_exp.experiment import data_path
 import json
 import time
-
 import experiment as ex  # sets JAX_PLATFORMS / JAX_ENABLE_X64 on import
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 from spikegd.qif import QIFNeuron
-
 from fastgrad import make_fast_grad
-from rnn import outfn
+from experiments.rnn.rnn import outfn
 
 DATA = "spike_data_km.npz"
 FIT = "spike_A_fit_km.json"
@@ -147,14 +146,14 @@ def stage_collect(args):
                           f"by {re:.2f})", flush=True)
         if t % 1000 == 0:
             print(f"  trial {t:6d}  loss {float(loss):.4e}  ({time.time() - t0:.0f}s)", flush=True)
-    np.savez(DATA, **{k: np.array(v) for k, v in rec.items()}, stride=args.stride)
+    np.savez(data_path(DATA), **{k: np.array(v) for k, v in rec.items()}, stride=args.stride)
     print(f"  {len(rec['trial'])} snapshots -> {DATA}")
 
 
 def stage_fit(args):
     cfg, _, _ = setup()
     N, ntar = cfg["N"], cfg["Ntar"]
-    d = np.load(DATA)
+    d = np.load(data_path(DATA))
     S = len(d["trial"])
     blk = (np.arange(S) // args.block) % 2
     tr, te = blk == 0, blk == 1
@@ -178,7 +177,7 @@ def stage_fit(args):
         print(f"  neuron {i}: median |cross-target part| / |exact gradient| = {cross:.2f}")
 
     # gradient-level comparison on held-out snapshots, per target neuron
-    Aper = np.array(json.load(open(args.A_fit))["A_per_neuron"])   # net layout (N, N, N)
+    Aper = np.array(json.load(open(data_path(args.A_fit)))["A_per_neuron"])   # net layout (N, N, N)
     print(f"  {S} snapshots (every {int(d['stride'])} trials); held-out = alternate blocks of "
           f"{args.block}\n")
     print(f"  {'model':<26} {'rows':<9} {'rel err (test)':>15} {'cos (test)':>11}")
@@ -206,7 +205,7 @@ def stage_fit(args):
             print(f"  neuron {i}, output {k}: ordinary spike in {kind:4.0%} of snapshots; "
                   f"singular values of I + A: {sv[:3]} ... {sv[-1]:.2f}")
     out["ridge"] = args.ridge
-    json.dump(out, open(args.out, "w"), indent=1)
+    json.dump(out, open(data_path(args.out), "w"), indent=1)
     print(f"  -> {args.out}")
 
 
@@ -221,7 +220,7 @@ def stage_fitcross(args):
     the normal matrix) and r_C on C."""
     cfg, _, _ = setup()
     N, ntar = cfg["N"], cfg["Ntar"]
-    d = np.load(DATA)
+    d = np.load(data_path(DATA))
     S = len(d["trial"])
     blk = (np.arange(S) // args.block) % 2
     tr, te = blk == 0, blk == 1
@@ -231,7 +230,7 @@ def stage_fitcross(args):
     MIX = np.tile(np.eye(P1), (ntar, nmax, 1, 1))
     CROSS = np.zeros((ntar, ntar, nmax, nmax))
     try:   # optional comparison with the A-only spike fit, if it has been made
-        old = json.load(open(args.A_only_fit))["spike_mix"]
+        old = json.load(open(data_path(args.A_only_fit)))["spike_mix"]
     except FileNotFoundError:
         old = None
     print(f"  ridge on A: {args.ridge}, on C: {args.ridge_c}\n")
@@ -288,7 +287,7 @@ def stage_fitcross(args):
                       f"{CROSS[m, i, :ns[m], :ns[i]]}")
     out.update({"spike_mix": MIX.tolist(), "cross": CROSS.tolist(), "n_outputs": ns,
                 "ridge": args.ridge, "ridge_c": args.ridge_c})
-    json.dump(out, open(args.out, "w"), indent=1)
+    json.dump(out, open(data_path(args.out), "w"), indent=1)
     print(f"  -> {args.out}")
 
 
@@ -296,13 +295,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stage", choices=["collect", "fit", "fitcross"])
     ap.add_argument("--ridge-c", type=float, default=1e-3, help="ridge on C (fitcross)")
-    ap.add_argument("--A-only-fit", dest="A_only_fit", default="spike_A_fit_km.json")
+    ap.add_argument("--A-only-fit", type=data_path, dest="A_only_fit", default="spike_A_fit_km.json")
     ap.add_argument("--trials", type=int, default=10_000)
     ap.add_argument("--stride", type=int, default=10)
     ap.add_argument("--block", type=int, default=50, help="snapshots per train/test block")
     ap.add_argument("--ridge", type=float, default=1e-6)
-    ap.add_argument("--A-fit", dest="A_fit", default="A_fit_km.json")
-    ap.add_argument("--out", default=FIT, help="fit output file")
+    ap.add_argument("--A-fit", type=data_path, dest="A_fit", default="A_fit_km.json")
+    ap.add_argument("--out", type=data_path, default=FIT, help="fit output file")
     args = ap.parse_args()
     {"collect": stage_collect, "fit": stage_fit, "fitcross": stage_fitcross}[args.stage](args)
 

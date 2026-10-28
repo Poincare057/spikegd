@@ -22,6 +22,7 @@ Usage (from experiments/rnn/):
 """
 
 import argparse
+from experiments.rnn.spikegd_exp.experiment import data_path, figure_path
 import json
 import time
 
@@ -79,7 +80,7 @@ def stage_collect(args):
         if t % 50 == 0:
             print(f"  step {t:4d}  loss {float(loss):.4e}  ({time.time() - t0:.0f}s)",
                   flush=True)
-    np.savez(DATA, exact=np.array(E), local=np.array(G), loss=np.array(L),
+    np.savez(data_path(DATA), exact=np.array(E), local=np.array(G), loss=np.array(L),
              ntar=ntar, args=json.dumps(vars(args)))
     print(f"collected {args.trials} steps in {time.time() - t0:.0f}s -> {DATA}")
 
@@ -130,7 +131,7 @@ def fit_rank1(E, G, w, offdiag, iters=500, ridge=1e-12):
 
 
 def stage_fit(args):
-    d = np.load(DATA)
+    d = np.load(data_path(DATA))
     E, G, ntar = d["exact"], d["local"], int(d["ntar"])
     T, N, _ = E.shape
     offdiag = 1.0 - np.eye(N)
@@ -175,7 +176,7 @@ def stage_fit(args):
     np.set_printoptions(precision=4, suppress=True, linewidth=140)
     print(f"  a (rows 0..{ntar - 1} identifiable): {a[:ntar]}")
     print(f"  b: {b}")
-    json.dump(out, open(FIT, "w"), indent=1)
+    json.dump(out, open(data_path(FIT), "w"), indent=1)
     print(f"  -> {FIT}")
 
 
@@ -185,10 +186,10 @@ def stage_plot(args):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    d = np.load(DATA)
+    d = np.load(data_path(DATA))
     E, G, ntar = d["exact"], d["local"], int(d["ntar"])
     T, N, _ = E.shape
-    fit = json.load(open(FIT))
+    fit = json.load(open(data_path(FIT)))
     F = G * (1 + np.array(fit["alpha_rank1"]))
     steps = np.arange(T)
     tar = list(range(ntar))
@@ -281,7 +282,7 @@ def stage_plot(args):
             ax.set_ylabel("dL/dw  (symlog)")
             ax.legend(frameon=False, fontsize=7)
 
-    fig.savefig(args.out, dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
+    fig.savefig(figure_path(args.out), dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
     print(f"figure written to {args.out}")
 
 
@@ -289,9 +290,9 @@ def main():
     global DATA, FIT
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stage", choices=["collect", "fit", "plot"])
-    ap.add_argument("--out", default="lowrank_gradients.png")
-    ap.add_argument("--data", default=DATA, help="gradient data file (collect/fit/plot)")
-    ap.add_argument("--fit-file", default=FIT, help="fit output/input file (fit/plot)")
+    ap.add_argument("--out", type=figure_path, default="lowrank_gradients.png")
+    ap.add_argument("--data", type=data_path, default=DATA, help="gradient data file (collect/fit/plot)")
+    ap.add_argument("--fit-file", type=data_path, default=FIT, help="fit output/input file (fit/plot)")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--ntar", type=int, default=2)
     ap.add_argument("--w-scale", type=float, default=3.0)

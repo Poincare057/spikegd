@@ -1,7 +1,7 @@
 # Local gradients and fitted non-locality for QIF RNNs
 
 This folder extends the recurrent-network experiment of Klos & Memmesheimer
-(`../rnn.py`, `rnn.ipynb`) with an e-prop-style **local** gradient and a fitted
+(`../rnn.py`, `../rnn.ipynb`) with an e-prop-style **local** gradient and a fitted
 correction for the **non-local** part of the exact gradient. The derivation is
 in the working notes (*Working Notes on Gradients*, A. Balivada); equation
 names below follow those notes.
@@ -12,12 +12,12 @@ terms**.
 
 | figure | contents |
 |---|---|
-| `sensitivity_km_Akc.png` | full figure (panels A–D) |
-| `sensitivity_km_Akc_loss_curves.png` | A: clean-input loss over training, one line per noise level σ |
-| `sensitivity_km_Akc_drift_curves.png` | B: parameter drift from each rule's noise-free run |
-| `sensitivity_km_Akc_final_loss.png` | C: final loss on held-out noisy inputs vs σ |
-| `sensitivity_km_Akc_final_drift.png` | D: final drift vs σ |
-| `sensitivity_km_Akc_cosine.png` | E–F: cosine between each rule's update and the exact gradient along the rule's own training |
+| `fig/sensitivity_km_Akc.png` | full figure (panels A–D) |
+| `fig/sensitivity_km_Akc_loss_curves.png` | A: clean-input loss over training, one line per noise level σ |
+| `fig/sensitivity_km_Akc_drift_curves.png` | B: parameter drift from each rule's noise-free run |
+| `fig/sensitivity_km_Akc_final_loss.png` | C: final loss on held-out noisy inputs vs σ |
+| `fig/sensitivity_km_Akc_final_drift.png` | D: final drift vs σ |
+| `fig/sensitivity_km_Akc_cosine.png` | E–F: cosine between each rule's update and the exact gradient along the rule's own training |
 
 ---
 
@@ -99,11 +99,13 @@ How the ridge factors were chosen (not a systematic search):
 | file | role |
 |---|---|
 | `../rnn.py` | published code, unchanged: inputs, targets, network simulation, output spike times (incl. pseudospikes), loss |
-| `experiment.py` | trial setup (`make_trial`), full loss (`make_full_loss`), frozen-surround resimulation (`record_surround`, `make_frozen_loss`) used as the local-gradient reference. Includes the fix that drops neuron i's own recorded spikes from its frozen input queue. Sets the JAX CPU and float64 flags on import. |
+| `experiment.py` | trial setup (`make_trial`), full loss (`make_full_loss`), frozen-surround resimulation (`record_surround`, `make_frozen_loss`) used as the local-gradient reference. Includes the fix that drops neuron i's own recorded spikes from its frozen input queue. Sets the JAX CPU and float64 flags on import. Also defines the shared `data_path` and `figure_path` helpers used by the scripts. |
 | `fastgrad.py` | `make_fast_grad(..., "trace")`: one-pass local gradient by forward eligibility traces. Option `spike_mix` applies (I + A⁽ⁱ'ᵏ⁾) to each output's eligibility; option `cross` adds the C term at trial end. |
 | `fit_spike_matrix.py` | `collect`: re-runs the published exact training and records, every 10 trials, ∂L/∂t, per-output local eligibilities and exact gradients. `fitcross`: fits A and C (Eq. FitAC). |
 | `sensitivity_km.py` | `run`: trains each rule from the published initial state for every (σ, noise seed), all seeds in parallel, recording clean-input loss and parameters every 50 trials and the final loss on held-out noisy inputs. `plot`: draws the figure (`--separate` also saves each part). Rules used here: `exact`, `local`, `matkc`. |
 | `cosine_km.py` | at the saved parameters of the `local` and `matkc` runs (every 250 trials, every σ and seed), evaluates the rule's gradient and the exact gradient on the clean inputs and computes their cosine over the recurrent weights, (a) on the target neurons' rows and (b) on all rows. Draws panels E–F. |
+| `lowrank.py` | collects exact/local gradients, fits a low-rank correction, and plots diagnostics; data goes to `data/` and figures to `fig/`. |
+| `fit_matrix.py` | fits neuron-specific synapse-mixing matrices from saved low-rank gradient data; reads and writes files in `data/`. |
 | `train_lowrank.py`, `train_noisy.py` | helpers imported by the above (`net_to_w`, a weight-layout conversion; `jitter`, the input noise) |
 
 Plus the `spikegd` package itself (neuron model and event-based simulation).
@@ -112,10 +114,10 @@ Plus the `spikegd` package itself (neuron model and event-based simulation).
 
 | file | made by | used by |
 |---|---|---|
-| `spike_data_km.npz` | `fit_spike_matrix.py collect` | `fit_spike_matrix.py fitcross` |
-| `spike_AC_fit_km.json` | `fit_spike_matrix.py fitcross` | `sensitivity_km.py run` (rule `matkc`) |
-| `sensitivity_km.npz` | `sensitivity_km.py run` | `sensitivity_km.py plot`, `cosine_km.py` |
-| `cosine_km.npz` | `cosine_km.py` | `cosine_km.py --plot-only` |
+| `data/spike_data_km.npz` | `fit_spike_matrix.py collect` | `fit_spike_matrix.py fitcross` |
+| `data/spike_AC_fit_km.json` | `fit_spike_matrix.py fitcross` | `sensitivity_km.py run` (rule `matkc`) |
+| `data/sensitivity_km.npz` | `sensitivity_km.py run` | `sensitivity_km.py plot`, `cosine_km.py` |
+| `data/cosine_km.npz` | `cosine_km.py` | `cosine_km.py --plot-only` |
 
 ---
 
@@ -130,26 +132,40 @@ and `spikegd` installed from the repository root:
 pip install -e .
 ```
 
-All commands below are run from `..`.
+After installing from the repository root, change to the experiment directory:
+
+```bash
+cd experiments/rnn/spikegd_exp
+```
+
+Run the commands below from there.
+All generated data (`.npz`, `.json`, `.pkl`) goes to this directory's `data/`
+folder, and all figures go to `fig/`. Relative input and output filenames,
+including CLI options, resolve inside these folders regardless of the working
+directory. The folders are created automatically. Explicit absolute paths are
+preserved. Both bare names (such as `--out result.png`) and directory-prefixed
+names (such as `--out fig/result.png`) are supported; the latter do not add a
+second directory level. Move data saved by older versions into `data/` and
+existing figures into `fig/` to use the current layout.
 
 ### Steps
 
 1. **Collect per-spike data** along the published exact run (~5 min;
-   writes `spike_data_km.npz`):
+   writes `data/spike_data_km.npz`):
 
    ```bash
    python fit_spike_matrix.py collect
    ```
 
-2. **Fit A and C** (seconds; writes `spike_AC_fit_km.json`). The ridges must
+2. **Fit A and C** (seconds; writes `data/spike_AC_fit_km.json`). The ridges must
    be given explicitly; the script's default `--ridge` is different.
 
    ```bash
-   python fit_spike_matrix.py fitcross --ridge 1 --ridge-c 1e-3 --out spike_AC_fit_km.json
+   python fit_spike_matrix.py fitcross --ridge 1 --ridge-c 1e-3 --out data/spike_AC_fit_km.json
    ```
 
 3. **Noise sweep**: σ ∈ {0, 0.025, 0.05, 0.1, 0.2}, 20 noise seeds each,
-   10,000 trials, 30 held-out noisy inputs (writes `sensitivity_km.npz`;
+   10,000 trials, 30 held-out noisy inputs (writes `data/sensitivity_km.npz`;
    about 66 min for exact, 21 min for local, 30 min for A + C on a laptop
    CPU on mains power):
 
@@ -160,26 +176,27 @@ All commands below are run from `..`.
 4. **Figures** (full figure plus the four parts):
 
    ```bash
-   python sensitivity_km.py plot --plot-rules exact local matkc --out sensitivity_km_Akc.png --separate
+   python sensitivity_km.py plot --plot-rules exact local matkc --out fig/sensitivity_km_Akc.png --separate
    ```
 
-5. **Cosine similarities** (needs `sensitivity_km.npz` and
-   `spike_AC_fit_km.json`; writes `cosine_km.npz` and
-   `sensitivity_km_Akc_cosine.png`):
+5. **Cosine similarities** (needs `data/sensitivity_km.npz` and
+   `data/spike_AC_fit_km.json`; writes `data/cosine_km.npz` and
+   `fig/sensitivity_km_Akc_cosine.png`):
 
    ```bash
    python cosine_km.py
    ```
 
-To redraw the figures only, step 4 needs just `sensitivity_km.npz` and the
-code, and `python cosine_km.py --plot-only` needs just `cosine_km.npz`.
+To redraw the figures only, step 4 needs just `data/sensitivity_km.npz` and the
+code, and `python cosine_km.py --plot-only` needs just `data/cosine_km.npz`.
 
 ---
 
 ## 4. Notes and caveats
 
-- `run` adds to an existing `sensitivity_km.npz` (keeping other rules if the
-  σ list matches); use a fresh folder for a clean reproduction.
+- `run` adds to an existing `data/sensitivity_km.npz` (keeping other rules if the
+  σ list matches). Move `data/sensitivity_km.npz` aside for a clean reproduction;
+  `sensitivity_km.py` does not expose a `--data` option.
 - Every random draw is seeded, but training is chaotic: round-off differences
   (another machine, JAX version or thread count) can change individual runs.
   Expect similar medians and interquartile ranges, not identical numbers.
