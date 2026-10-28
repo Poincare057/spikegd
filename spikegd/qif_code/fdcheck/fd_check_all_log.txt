@@ -1,0 +1,102 @@
+WARNING:2026-10-28 00:00:24,663:jax._src.xla_bridge:794: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+PASS [A neuron model] current I(t) = b e^{-2t}  (eq. 2) vs SGD flow_I: n=50 max_rel=2.16e-16 
+PASS [A neuron model] V(t), branch tan  (eq. 3) vs SGD flow_V: n=40 max_rel=3.56e-15 
+PASS [A neuron model] V(t), branch tan  (eq. 3) vs ODE (DOP853, rtol 1e-12): n=15 max_rel=7.64e-14 
+PASS [A neuron model] V(t), branch b0  (eq. 3) vs SGD flow_V: n=40 max_rel=8.15e-16 
+PASS [A neuron model] V(t), branch b0  (eq. 3) vs ODE (DOP853, rtol 1e-12): n=15 max_rel=4.57e-13 
+PASS [A neuron model] V(t), branch coth  (eq. 3) vs SGD flow_V: n=40 max_rel=1.94e-14 
+PASS [A neuron model] V(t), branch coth  (eq. 3) vs ODE (DOP853, rtol 1e-12): n=15 max_rel=1.24e-13 
+PASS [A neuron model] V(t), branch tanh  (eq. 3) vs SGD flow_V: n=40 max_rel=3.89e-15 
+PASS [A neuron model] V(t), branch tanh  (eq. 3) vs ODE (DOP853, rtol 1e-12): n=15 max_rel=1.68e-13 
+PASS [A neuron model] V(t), branch line  (eq. 3) vs SGD flow_V: n=21 max_rel=1.11e-16 spikegd returns non-finite values on part of the invariant line; finite ones compared
+PASS [A neuron model] V(t), branch line  (eq. 3) vs ODE (DOP853, rtol 1e-12): n=15 max_rel=2.09e-12 
+PASS [A neuron model] t_sp, branch tan  (eq. 4) vs SGD dt_spike: n=40 max_rel=1.94e-16 
+PASS [A neuron model] t_sp, branch tan  (eq. 4) vs ODE blow-up time (phase, rtol 1e-12): n=15 max_rel=1.95e-12 
+PASS [A neuron model] t_sp, branch coth  (eq. 4) vs SGD dt_spike: n=40 max_rel=4.55e-15 
+PASS [A neuron model] t_sp, branch coth  (eq. 4) vs ODE blow-up time (phase, rtol 1e-12): n=15 max_rel=1.13e-11 
+PASS [A neuron model] t_sp, branch b0  (eq. 4) vs SGD dt_spike: n=40 max_rel=2.08e-16 spikegd evaluates b=0 at b=1e-6
+PASS [A neuron model] t_sp, branch b0  (eq. 4) vs ODE blow-up time (phase, rtol 1e-12): n=15 max_rel=5.34e-12 
+PASS [A neuron model] t_sp after a reset  (eq. 5) vs MP limit V0=-1e40: n=40 max_rel=2.22e-16 
+PASS [A neuron model] t_sp after a reset  (eq. 5) vs SGD dt_spike at V=-1/eps: n=40 max_rel=2.73e-10 
+PASS [A neuron model] dt_sp/dV0, branch tan vs MPFD: n=40 max_rel=5.55e-16 
+PASS [A neuron model] dt_sp/dV0, branch tan vs SGD autodiff: n=40 max_rel=7.77e-16 
+PASS [A neuron model] dt_sp/db, branch tan vs MPFD: n=40 max_rel=5.00e-16 
+PASS [A neuron model] dt_sp/db, branch tan vs SGD autodiff: n=40 max_rel=3.05e-16 
+PASS [A neuron model] dt_sp/dV0, branch coth vs MPFD: n=40 max_rel=4.91e-16 
+PASS [A neuron model] dt_sp/dV0, branch coth vs SGD autodiff: n=40 max_rel=1.35e-15 
+PASS [A neuron model] dt_sp/db, branch coth vs MPFD: n=40 max_rel=3.83e-16 
+PASS [A neuron model] dt_sp/db, branch coth vs SGD autodiff: n=40 max_rel=1.28e-15 
+PASS [A neuron model] dt_sp/dV0, b = 0 vs MPFD: n=30 max_rel=1.25e-16 
+PASS [A neuron model] dt_sp/db, b = 0 (limit of both branches) vs MPFD across b=0: n=30 max_rel=1.11e-16 
+PASS [A neuron model] dV/dV0, branch tan vs MPFD: n=40 max_rel=1.67e-15 
+PASS [A neuron model] dV/dV0, branch tan vs SGD autodiff: n=40 max_rel=8.45e-16 
+PASS [A neuron model] dV/db, branch tan vs MPFD: n=40 max_rel=1.67e-15 
+PASS [A neuron model] dV/db, branch tan vs SGD autodiff: n=40 max_rel=7.51e-16 
+PASS [A neuron model] dV/dt, branch tan vs MPFD: n=40 max_rel=1.38e-15 
+PASS [A neuron model] dV/dV0, branch coth vs MPFD: n=40 max_rel=1.65e-15 
+PASS [A neuron model] dV/dV0, branch coth vs SGD autodiff: n=40 max_rel=6.96e-15 
+PASS [A neuron model] dV/db, branch coth vs MPFD: n=40 max_rel=3.71e-15 
+PASS [A neuron model] dV/db, branch coth vs SGD autodiff: n=40 max_rel=1.09e-14 
+PASS [A neuron model] dV/dt, branch coth vs MPFD: n=40 max_rel=1.58e-15 
+PASS [A neuron model] dV/dV0, branch tanh vs MPFD: n=40 max_rel=3.33e-16 
+PASS [A neuron model] dV/dV0, branch tanh vs SGD autodiff: n=40 max_rel=3.89e-16 
+PASS [A neuron model] dV/db, branch tanh vs MPFD: n=40 max_rel=2.22e-16 
+PASS [A neuron model] dV/db, branch tanh vs SGD autodiff: n=40 max_rel=2.78e-16 
+PASS [A neuron model] dV/dt, branch tanh vs MPFD: n=40 max_rel=6.66e-16 
+PASS [A neuron model] dV/dV0, branch b0 vs MPFD: n=40 max_rel=1.40e-15 
+PASS [A neuron model] dV/dV0, branch b0 vs SGD autodiff: n=40 max_rel=1.77e-06 spikegd differentiates the b=0 branch through the b=1e-6 tan branch
+PASS [A neuron model] dV/db, b = 0 (variational equation) vs MPFD across b=0: n=40 max_rel=2.89e-15 
+PASS [A neuron model] dV/db, b = 0, V0 = 0 vs MPFD across b=0: n=10 max_rel=2.78e-17 the printed entry is 0/0 at V0=0; its limit e^{-t}(1-e^{-t}) is used
+PASS [A neuron model] dV/dt, branch b0 vs MPFD: n=40 max_rel=1.42e-15 
+ERRATUM [A neuron model] dV/db on the line |V0|=sqrt(-b), as printed vs MPFD (fixed V0): n=20 max_rel=1.09e+00 ERRATUM: the printed entry is the derivative along the line, not at fixed V0
+PASS [A neuron model] dV/db on the line, corrected e^{-t}(e^{2V0(1-e^{-t})}-1)/(2V0) vs MPFD (fixed V0): n=20 max_rel=1.74e-12 
+PASS [A neuron model] V(tau) after a reset, b>0 vs MP V0=-1e40: n=20 max_rel=1.56e-15 
+PASS [A neuron model] dV(tau)/db after a reset, b>0 vs MPFD: n=20 max_rel=2.44e-15 
+PASS [A neuron model] V(tau) after a reset, b>0 vs SGD flow_V from V=-1/eps: n=20 max_rel=4.92e-09 
+PASS [A neuron model] V(tau) after a reset, b<0 vs MP V0=-1e40: n=30 max_rel=8.47e-16 
+PASS [A neuron model] dV(tau)/db after a reset, b<0 vs MPFD: n=30 max_rel=1.01e-15 
+PASS [A neuron model] V(tau) after a reset, b<0 vs SGD flow_V from V=-1/eps: n=30 max_rel=1.93e-09 
+PASS [A neuron model] dV(tau)/db after a reset, b = 0 vs MPFD across b=0: n=15 max_rel=2.98e-15 
+PASS [A neuron model] Prop. 1: grad t_sp . f = -1, branch tan vs exact value -1: n=40 max_rel=4.44e-16 
+PASS [A neuron model] Prop. 1: grad t_sp . f = -1, branch coth vs exact value -1: n=40 max_rel=7.11e-15 
+PASS [A neuron model] Prop. 1: grad t_sp . f = -1, branch b0 vs exact value -1: n=40 max_rel=6.66e-16 
+PASS [A neuron model] Prop. 2: 1 + grad t_sp . f(x-) = grad t_sp . (-w, 2w) vs both sides: n=25 max_rel=3.33e-16 
+PASS [A neuron model] Prop. 2: d t_out / d t_in vs SGD autodiff wrt input time: n=25 max_rel=4.44e-16 
+PASS [B event maps] J_in->in, branch tan vs MPFD of the map: n=60 max_rel=2.33e-15 
+PASS [B event maps] J_in->in, branch coth vs MPFD of the map: n=60 max_rel=3.85e-15 
+PASS [B event maps] J_in->in, branch tanh vs MPFD of the map: n=60 max_rel=3.28e-16 
+PASS [B event maps] J_in->in, branch b0 vs MPFD of the map: n=60 max_rel=8.94e-15 
+PASS [B event maps] J_in->out, branch tan vs MPFD of the map: n=60 max_rel=5.28e-16 
+PASS [B event maps] J_in->out, branch coth vs MPFD of the map: n=60 max_rel=8.14e-16 
+PASS [B event maps] J_out->out (eq. 8) vs MPFD of the map: n=80 max_rel=1.11e-16 
+PASS [B event maps] J_out->in, reset current b>0 vs MPFD of the map: n=60 max_rel=3.30e-15 
+PASS [B event maps] J_out->in, reset current b<0 vs MPFD of the map: n=80 max_rel=2.07e-15 
+PASS [C single neuron gradient] Case 1a: d t_out / d(V0, w) from the event maps vs SGD autodiff: n=94 max_rel=1.49e-08 12 trials
+PASS [C single neuron gradient] Case 1a: d t_out / d(V0, w) from the event maps vs FD of spikegd trials: n=94 max_rel=1.50e-08 12 trials
+PASS [C single neuron gradient] Case 1b: d t_out / d(V0, w) from the event maps vs SGD autodiff: n=78 max_rel=2.35e-09 12 trials
+PASS [C single neuron gradient] Case 1b: d t_out / d(V0, w) from the event maps vs FD of spikegd trials: n=78 max_rel=5.87e-09 12 trials
+PASS [C single neuron gradient] Case 2: d t_out / d(V0, w) from the event maps vs SGD autodiff: n=152 max_rel=2.73e-09 12 trials
+PASS [C single neuron gradient] Case 2: d t_out / d(V0, w) from the event maps vs FD of spikegd trials: n=152 max_rel=5.01e-09 12 trials
+PASS [C single neuron gradient] Case 3: d t_out / d(V0, w) from the event maps vs SGD autodiff: n=340 max_rel=5.99e-09 12 trials
+PASS [C single neuron gradient] Case 3: d t_out / d(V0, w) from the event maps vs FD of spikegd trials: n=340 max_rel=5.81e-09 12 trials
+PASS [D capacity] Prop. 3(i): c_{i+1} = c_i - pi vs SGD reset currents: n=213 max_rel=2.80e-09 
+PASS [D capacity] Prop. 3(ii): number of outputs = ceil(c2/pi) vs SGD output count: n=40 max_rel=0.00e+00 
+PASS [D capacity] App. C: t_i = 1/2 ln b - ln(c2-(i-1)pi) vs SGD output times: n=253 max_rel=1.26e-07 spikegd error grows along long trains (reset at -1/eps)
+PASS [D capacity] Prop. 3(iii): dt_i/dtheta = beta/2b - gamma/c_{i+1}  (theta = V0, b0, w) vs SGD autodiff: n=759 max_rel=1.04e-06 amplified spikegd round-off near the capacity boundary
+PASS [D capacity] Prop. 3(iii): dt_i/dtheta = beta/2b - gamma/c_{i+1}  (theta = V0, b0, w) vs product of event maps (rtrl_paper): n=759 max_rel=9.81e-14 
+PASS [D capacity] App. C: weight of the last input, ratio = (2k-1) c2/c_{k+1} vs SGD autodiff: n=4 max_rel=1.62e-08 
+PASS [D capacity] QR exponents along a train = (0, ln(c_{k+1}/c2)/(k-1)) vs Benettin QR on the maps: n=6 max_rel=0.00e+00 
+PASS [D capacity] Prop. 4: outputs in a gap = max(0, ceil((c2 - sqrt(B) e^{-G})/pi)) vs SGD trials (Poisson inputs): n=659 max_rel=0.00e+00 659 groups
+PASS [E R1] exact trace with J_rec (eq. 9-10): d t_out / d(V0, w_ext, w_j) vs FD of an independent R1 simulator: n=366 max_rel=2.18e-09 23 trials, delay d in [0.02, 0.3]
+PASS [E R1] exact trace with J_rec as d -> 0 (d = 1e-8) vs SGD autodiff, self-synapse (spikegd has no delays): n=138 max_rel=3.30e-08 10 trials; spikegd re-enters at the reset itself
+PASS [E R1] Prop. 5: exact cycle map F = [[1,K],[0,lambda]] vs MPFD of one cycle: n=100 max_rel=2.22e-16 
+PASS [E R1] Prop. 5: e-prop cycle map G = F - (sigma,rho)(1,0) vs MPFD of one cycle, re-entry held: n=100 max_rel=6.06e-15 
+PASS [E R1] periodic example w_j=12, d=0.15: B*, eig F, eig G vs numbers printed in the paper: n=5 max_rel=7.53e-04 B*=0.8850, eig F=[1.     0.2251], eig G=[3.3475 0.0518]
+PASS [E R1] Prop. 6: (A) or (B) => next output exists vs exact next-spike test: n=1 max_rel=0.00e+00 357 draws satisfying (A) or (B)
+PASS [E R1] Prop. 6: w_min -> pi^2 (1 - e^{-2 tau}) in a periodic train vs direct sum of m_k: n=10 max_rel=2.33e-16 
+PASS [E R1] App. D: w_j < 0 gives no more outputs than w_j = 0 vs R1 simulator: n=1 max_rel=0.00e+00 40 trials
+PASS [F network] d t_C / d(W_in, W_net) from single-neuron maps + cross blocks (Prop. 7) vs SGD autodiff: n=588 max_rel=1.35e-07 12 trials, zero delays as in spikegd
+PASS [F network] d t_C / d(W_in, W_net) from single-neuron maps + cross blocks (Prop. 7) vs FD of spikegd trials: n=588 max_rel=5.19e-07 12 trials
+PASS [G pseudospikes] d t_ps / d w: our trace at the trial end x closed-form gradient of spikegd t_pseudo vs SGD autodiff through event + t_pseudo: n=20 max_rel=1.31e-08 
+
+98/99 pass, 1 errata, 0 unexplained, 476 s

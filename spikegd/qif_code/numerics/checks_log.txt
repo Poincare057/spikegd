@@ -1,0 +1,12 @@
+out->out  b=   12  max|diff| = 4.44e-16
+out->out  b=   50  max|diff| = 1.11e-16
+out->out  b=  400  max|diff| = 1.11e-16
+grad t_sp . f at (0.3,5) = -1.000000000000
+grad t_sp . f at (2.0,-1) = -1.000000000000
+grad t_sp . f at (1.5,1e-09) = -1.000000000000
+grad t_sp . f at (-0.5,3e+01) = -1.000000000000
+param 0: 10 outputs, max rel err RTRL vs FD = 1.17e-10
+param 1: 10 outputs, max rel err RTRL vs FD = 3.21e-10
+param 2: 10 outputs, max rel err RTRL vs FD = 5.25e-10
+Case 1b: 8 outputs, ceil(c2/pi)=8, max |M_t(i)/M_t(1) - c2/c_{i+1}| = 2.84e-14
+last amplification c2/c_{k+1} = 24.572  (>= k = 8)
