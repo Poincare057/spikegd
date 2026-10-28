@@ -1,7 +1,7 @@
 # Local gradients and fitted non-locality for QIF RNNs
 
 This folder extends the recurrent-network experiment of Klos & Memmesheimer
-(`rnn.py`, `rnn.ipynb`) with an e-prop-style **local** gradient and a fitted
+(`../rnn.py`, `rnn.ipynb`) with an e-prop-style **local** gradient and a fitted
 correction for the **non-local** part of the exact gradient. The derivation is
 in the working notes (*Working Notes on Gradients*, A. Balivada); equation
 names below follow those notes.
@@ -25,7 +25,7 @@ terms**.
 
 ### Task and setting
 
-The published RNN task (`rnn.ipynb`, `config_qif`): N = 10 QIF neurons, 20
+The published RNN task (`../rnn.ipynb`, `config_qif`): N = 10 QIF neurons, 20
 Poisson input channels, and two **target** neurons whose spike times are
 trained towards target spike trains (7 and 2 target spikes, plus a final
 "no extra spike before 1.1 T" entry). Missing spikes are scored through
@@ -43,7 +43,7 @@ The exact gradient (Eq. LossChain, summed over **all** targets m):
 
 $$\frac{d\mathcal L}{dw_{ij}} = \sum_{m}\sum_{k_m}\frac{\partial\mathcal L}{\partial t_{k_m}}\frac{dt_{k_m}}{dw_{ij}},$$
 
-computed by autodiff through the event-based simulation, as in `rnn.py`.
+computed by autodiff through the event-based simulation, as in `../rnn.py`.
 
 The **local** gradient drops the chain terms of Eq. TotalSpikeDeriv:
 
@@ -98,7 +98,7 @@ How the ridge factors were chosen (not a systematic search):
 
 | file | role |
 |---|---|
-| `rnn.py` | published code, unchanged: inputs, targets, network simulation, output spike times (incl. pseudospikes), loss |
+| `../rnn.py` | published code, unchanged: inputs, targets, network simulation, output spike times (incl. pseudospikes), loss |
 | `experiment.py` | trial setup (`make_trial`), full loss (`make_full_loss`), frozen-surround resimulation (`record_surround`, `make_frozen_loss`) used as the local-gradient reference. Includes the fix that drops neuron i's own recorded spikes from its frozen input queue. Sets the JAX CPU and float64 flags on import. |
 | `fastgrad.py` | `make_fast_grad(..., "trace")`: one-pass local gradient by forward eligibility traces. Option `spike_mix` applies (I + A⁽ⁱ'ᵏ⁾) to each output's eligibility; option `cross` adds the C term at trial end. |
 | `fit_spike_matrix.py` | `collect`: re-runs the published exact training and records, every 10 trials, ∂L/∂t, per-output local eligibilities and exact gradients. `fitcross`: fits A and C (Eq. FitAC). |
@@ -130,7 +130,7 @@ and `spikegd` installed from the repository root:
 pip install -e .
 ```
 
-All commands below are run from `experiments/rnn/`.
+All commands below are run from `..`.
 
 ### Steps
 

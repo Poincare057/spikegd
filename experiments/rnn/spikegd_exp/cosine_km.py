@@ -12,25 +12,30 @@ is computed over the recurrent weights, (a) on the target neurons' rows (the
 only rows the local rules update) and (b) on all rows. Initial-state
 gradients are not included. Writes cosine_km.npz and a figure.
 
-Usage (from experiments/rnn/, after sensitivity_km.py run):
+Usage (from experiments/spikegd_exp/, after sensitivity_km.py run):
 
     python cosine_km.py             # -> cosine_km.npz, sensitivity_km_Akc_cosine.png
     python cosine_km.py --plot-only
 """
 
+if __package__:
+    from ._paths import data_path
+else:
+    from _paths import data_path
+
 import argparse
 import json
 import time
 
-import experiment as ex  # sets JAX_PLATFORMS / JAX_ENABLE_X64 on import
+from experiments.rnn.spikegd_exp import experiment as ex
 import jax
 import jax.numpy as jnp
 import numpy as np
 from spikegd.qif import QIFNeuron
 
-from fastgrad import make_fast_grad
+from experiments.rnn.spikegd_exp.fastgrad import make_fast_grad
 
-OUT = "cosine_km.npz"
+OUT = data_path("cosine_km.npz")
 
 
 def compute(args):
@@ -138,10 +143,10 @@ def plot(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--data", default="sensitivity_km.npz")
-    ap.add_argument("--fit", default="spike_AC_fit_km.json")
+    ap.add_argument("--data", default=data_path("sensitivity_km.npz"))
+    ap.add_argument("--fit", default=data_path("spike_AC_fit_km.json"))
     ap.add_argument("--every", type=int, default=250, help="trials between evaluations")
-    ap.add_argument("--out", default="sensitivity_km_Akc_cosine.png")
+    ap.add_argument("--out", default=data_path("sensitivity_km_Akc_cosine.png"))
     ap.add_argument("--plot-only", action="store_true")
     args = ap.parse_args()
     if not args.plot_only:

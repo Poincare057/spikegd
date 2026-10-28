@@ -72,7 +72,7 @@ import argparse
 import json
 import time
 
-import experiment as ex  # sets JAX_PLATFORMS / JAX_ENABLE_X64 on import
+from experiments.rnn.Spike_Experiments import experiment as ex
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -80,7 +80,7 @@ import optax
 from jax import lax, random
 from spikegd.qif import QIFNeuron
 
-from fastgrad import make_fast_grad
+from experiments.rnn.Spike_Experiments.fastgrad import make_fast_grad
 from train_lowrank import net_to_w
 from train_noisy import jitter
 

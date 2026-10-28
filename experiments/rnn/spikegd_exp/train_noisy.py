@@ -27,7 +27,7 @@ import argparse
 import json
 import time
 
-import experiment as ex  # sets JAX_PLATFORMS / JAX_ENABLE_X64 on import
+from experiments.rnn.Spike_Experiments import experiment as ex
 import jax
 import jax.numpy as jnp
 import numpy as np
