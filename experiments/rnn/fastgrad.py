@@ -37,8 +37,21 @@ from jax import lax
 import experiment as ex
 
 
-def make_fast_grad(neuron, trial, ntar, mode="trace"):
+def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None):
+    """spike_mix (trace mode only): optional array (ntar, nmax, N-1, N-1) holding
+    (I + A^(i,k)) for target i and output index k. Each output's eligibility over
+    its neuron's input weights (spikegd layout, self entry dropped) is multiplied
+    by its own matrix before it is accumulated; the initial-state directions are
+    left unchanged. None gives the plain local gradient.
+
+    cross (trace mode only): optional array (ntar, ntar, nmax, nmax) of
+    coefficients C[m, i, c', c] for the explicit cross-target term
+        g_ij += sum_c ( sum_{m != i} sum_c' dL/dt_{c'_m} C[m, i, c', c] ) e_ij(t_{c_i}).
+    The other target's learning signals are only all known at the end of the
+    trial, so each output's eligibility and dL/dt are stored (ntar * nmax
+    vectors of length N + 2) and the term is added at trial end."""
     assert mode in ("trace", "closed")
+    assert (spike_mix is None and cross is None) or mode == "trace"
     cfg = trial["cfg"]
     N, T, K, eps = cfg["N"], cfg["T"], cfg["K"], neuron.eps
     denom = trial["denom"]
@@ -72,6 +85,17 @@ def make_fast_grad(neuron, trial, ntar, mode="trace"):
     flow_jvp = jax.vmap(lambda xk, dt, z, ddt: jax.jvp(neuron.flow, (xk, dt), (z, ddt))[1],
                         in_axes=(None, None, 1, 0), out_axes=1)
 
+    MIX = None if spike_mix is None else jnp.asarray(spike_mix)
+    CROSS = None if cross is None else jnp.asarray(cross)
+
+    def mixed(k, c, vec):
+        """Apply (I + A^(k,c)) to the weight part of a (D,) eligibility vector."""
+        if MIX is None:
+            return vec
+        c = jnp.clip(c, 0, MIX.shape[1] - 1)
+        off = vec[:N][OFFDIAG[k]] @ MIX[k, c]
+        return jnp.concatenate([jnp.zeros(N).at[OFFDIAG[k]].set(off), vec[N:]])
+
     def fn(w, x0, spikes_in):
         wn = ex.w_to_weights_net(w)
         order = jnp.argsort(spikes_in[0])
@@ -88,6 +112,9 @@ def make_fast_grad(neuron, trial, ntar, mode="trace"):
             tr["tau"] = jnp.zeros((ntar, D))                      # d(event time)
             tr["sig"] = jnp.stack([grad_dt_spike(x0[:, k]) @ z0   # d(next spike of k)
                                    for k in range(ntar)])
+            if CROSS is not None:
+                tr["EL"] = jnp.zeros((ntar, nmax, D))    # eligibility of each output
+                tr["DL"] = jnp.zeros((ntar, nmax))       # dL/dt of each output
         else:
             tr["P"] = jnp.zeros(N)
             tr["s"] = jnp.stack([grad_dt_spike(x0[:, k])[1] for k in range(ntar)])
@@ -123,7 +150,13 @@ def make_fast_grad(neuron, trial, ntar, mode="trace"):
                                     tau_new + grad_dt_spike(x_new[:, k]) @ zn,
                                     tr["sig"][k])
                     c = cnt[k]
-                    g = g.at[k].add(jnp.where(is_k, dloss_dt(k, c, t_new), 0.0) * tau_new)
+                    dl = jnp.where(is_k, dloss_dt(k, c, t_new), 0.0)
+                    g = g.at[k].add(dl * mixed(k, c, tau_new))
+                    if CROSS is not None:
+                        ok = is_k & (c < ns[k])
+                        ci = jnp.minimum(c, nmax - 1)
+                        tr["EL"] = tr["EL"].at[k, ci].set(jnp.where(ok, tau_new, tr["EL"][k, ci]))
+                        tr["DL"] = tr["DL"].at[k, ci].set(jnp.where(ok, dl, tr["DL"][k, ci]))
                     zs.append(zn); taus.append(tau_new); sigs.append(sig)
                 tr["z"], tr["tau"], tr["sig"] = jnp.stack(zs), jnp.stack(taus), jnp.stack(sigs)
             else:
@@ -169,10 +202,40 @@ def make_fast_grad(neuron, trial, ntar, mode="trace"):
 
             lp, (gx, gwr) = jax.value_and_grad(fpseudo, argnums=(0, 1))(x_end[:, k], wn[k])
             loss = loss + lp
-            if mode == "trace":
+            if mode == "trace" and MIX is not None:
+                # per-output pseudospike terms, so each gets its own (I + A^(k,c))
+                def fterms(xk, wrow, k=k, n=n, Kout=Kout, cs=cs):
+                    tp = neuron.t_pseudo(xk, neuron.linear(rates, wrow), cs + 1 - Kout, cfg)
+                    return jnp.stack([loss_terms(k, tp, (cs >= Kout) & (cs == c))
+                                      for c in range(n)])
+                jx, jw = jax.jacrev(fterms, argnums=(0, 1))(x_end[:, k], wn[k])
+                for c in range(n):
+                    vec = jx[c] @ tr["z"][k] + jnp.concatenate([jw[c], jnp.zeros(2)])
+                    g = g.at[k].add(mixed(k, jnp.array(c), vec))
+            elif mode == "trace":
                 g = g.at[k].add(gx @ tr["z"][k] + jnp.concatenate([gwr, jnp.zeros(2)]))
             else:
                 g = g.at[k, :N].add(gx[1] * tr["P"] + gwr)
+
+            if CROSS is not None:
+                # store eligibility and dL/dt of this neuron's pseudospike outputs
+                def ftimes(xk, wrow, n=n, Kout=Kout, cs=cs):
+                    return neuron.t_pseudo(xk, neuron.linear(rates, wrow), cs + 1 - Kout, cfg)
+                tp = ftimes(x_end[:, k], wn[k])
+                jtx, jtw = jax.jacrev(ftimes, argnums=(0, 1))(x_end[:, k], wn[k])
+                for c in range(n):
+                    pseudo = c >= Kout
+                    el = jtx[c] @ tr["z"][k] + jnp.concatenate([jtw[c], jnp.zeros(2)])
+                    dl = dloss_dt(k, jnp.array(c), tp[c])
+                    tr["EL"] = tr["EL"].at[k, c].set(jnp.where(pseudo, el, tr["EL"][k, c]))
+                    tr["DL"] = tr["DL"].at[k, c].set(jnp.where(pseudo, dl, tr["DL"][k, c]))
+
+        if CROSS is not None:
+            # explicit cross-target term: sum_c S_ic e_i.(t_c), with
+            # S_ic = sum_{m != i} sum_c' dL/dt_{c'_m} C[m, i, c', c]
+            for i in range(ntar):
+                S = sum(tr["DL"][m] @ CROSS[m, i] for m in range(ntar) if m != i)   # (nmax,)
+                g = g.at[i, :N].add(S[:ns[i]] @ tr["EL"][i, :ns[i], :N])
 
         gw_net = jnp.zeros((N, N)).at[:ntar].set(g[:, :N])
         gw = jnp.take_along_axis(gw_net, OFFDIAG, axis=1)
