@@ -1,5 +1,9 @@
 import numpy as np
-from qif_events import *
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'figs'))
+from generate_figs import H, PI, groups, jac, map_out_out, simulate, tsp
 rng = np.random.default_rng(0)
 # 1. complex-step out->out vs the closed form of eq. (c-Joo)
 for b in [12.0, 50.0, 400.0]:

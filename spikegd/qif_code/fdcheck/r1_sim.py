@@ -1,7 +1,7 @@
-"""Independent R1 simulator (values only) on the qif_events closed forms, for finite differences."""
+"""Independent R1 simulator (values only) on the generate_figs closed forms, for finite differences."""
 import numpy as np, sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'figs'))
-from qif_events import flow, flow_reset, tsp, tsp_reset, PI
+from spikegd.qif_code.figs.generate_figs import flow, flow_reset, tsp, tsp_reset, PI
 def r1_outputs(w_ext, t_ext, wj, d, T, V0=0.0, b0=0.0):
     V, b = flow(V0, b0, t_ext), b0*np.exp(-2*t_ext)+w_ext; t = t_ext; outs = []
     while True:

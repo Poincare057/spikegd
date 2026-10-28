@@ -30,7 +30,7 @@ d → 0. The three-neuron network is checked with zero delays, which is spikegd'
 ```bash
 pip install numpy scipy mpmath "jax[cpu]" jaxtyping optax
 git clone https://github.com/chklos/spikegd && pip install -e spikegd --no-deps
-python3 fd_check_all.py          # needs ../figs/qif_events.py for the QR helper and r1_sim.py
+python3 fd_check_all.py          # imports helpers from ../figs/generate_figs.py and r1_sim.py
 ```
 
 `sg.py` wraps spikegd (float64, `eps = 1e-10`). `r1_sim.py` is a values-only R1 simulator used for finite differences.
