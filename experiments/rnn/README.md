@@ -17,6 +17,7 @@ terms**.
 | `sensitivity_km_Akc_drift_curves.png` | B: parameter drift from each rule's noise-free run |
 | `sensitivity_km_Akc_final_loss.png` | C: final loss on held-out noisy inputs vs σ |
 | `sensitivity_km_Akc_final_drift.png` | D: final drift vs σ |
+| `sensitivity_km_Akc_cosine.png` | E–F: cosine between each rule's update and the exact gradient along the rule's own training |
 
 ---
 
@@ -72,6 +73,15 @@ passed to AdaBelief.
 The ridge is essential: without it the fit is numerically singular (condition
 numbers ~1e13) and training diverges (loss ~0.71 instead of 0.0035).
 
+How the ridge factors were chosen (not a systematic search):
+
+- r_A = 1 comes from the earlier A-only rule: one noise-free training run at
+  each of r = 1e-3, 1e-2, 1e-1, 1 (final losses 0.024, 0.032, 0.021, 0.0043).
+  It was kept unchanged when C was added.
+- r_C = 1e-3 was compared only with r_C = 1, by held-out fit. At r_C = 1 the C
+  term is shrunk to almost nothing.
+- Only (1, 1e-3) and (0, 0) were trained with C.
+
 ### Results (held-out noisy loss, median over 20 noise seeds)
 
 | σ | exact | local | local + A + C |
@@ -93,6 +103,7 @@ numbers ~1e13) and training diverges (loss ~0.71 instead of 0.0035).
 | `fastgrad.py` | `make_fast_grad(..., "trace")`: one-pass local gradient by forward eligibility traces. Option `spike_mix` applies (I + A⁽ⁱ'ᵏ⁾) to each output's eligibility; option `cross` adds the C term at trial end. |
 | `fit_spike_matrix.py` | `collect`: re-runs the published exact training and records, every 10 trials, ∂L/∂t, per-output local eligibilities and exact gradients. `fitcross`: fits A and C (Eq. FitAC). |
 | `sensitivity_km.py` | `run`: trains each rule from the published initial state for every (σ, noise seed), all seeds in parallel, recording clean-input loss and parameters every 50 trials and the final loss on held-out noisy inputs. `plot`: draws the figure (`--separate` also saves each part). Rules used here: `exact`, `local`, `matkc`. |
+| `cosine_km.py` | at the saved parameters of the `local` and `matkc` runs (every 250 trials, every σ and seed), evaluates the rule's gradient and the exact gradient on the clean inputs and computes their cosine over the recurrent weights, (a) on the target neurons' rows and (b) on all rows. Draws panels E–F. |
 | `train_lowrank.py`, `train_noisy.py` | helpers imported by the above (`net_to_w`, a weight-layout conversion; `jitter`, the input noise) |
 
 Plus the `spikegd` package itself (neuron model and event-based simulation).
@@ -103,7 +114,8 @@ Plus the `spikegd` package itself (neuron model and event-based simulation).
 |---|---|---|
 | `spike_data_km.npz` | `fit_spike_matrix.py collect` | `fit_spike_matrix.py fitcross` |
 | `spike_AC_fit_km.json` | `fit_spike_matrix.py fitcross` | `sensitivity_km.py run` (rule `matkc`) |
-| `sensitivity_km.npz` | `sensitivity_km.py run` | `sensitivity_km.py plot` |
+| `sensitivity_km.npz` | `sensitivity_km.py run` | `sensitivity_km.py plot`, `cosine_km.py` |
+| `cosine_km.npz` | `cosine_km.py` | `cosine_km.py --plot-only` |
 
 ---
 
@@ -151,7 +163,16 @@ All commands below are run from `experiments/rnn/`.
    python sensitivity_km.py plot --plot-rules exact local matkc --out sensitivity_km_Akc.png --separate
    ```
 
-To redraw the figures only, step 4 needs just `sensitivity_km.npz` and the code.
+5. **Cosine similarities** (needs `sensitivity_km.npz` and
+   `spike_AC_fit_km.json`; writes `cosine_km.npz` and
+   `sensitivity_km_Akc_cosine.png`):
+
+   ```bash
+   python cosine_km.py
+   ```
+
+To redraw the figures only, step 4 needs just `sensitivity_km.npz` and the
+code, and `python cosine_km.py --plot-only` needs just `cosine_km.npz`.
 
 ---
 
@@ -167,6 +188,10 @@ To redraw the figures only, step 4 needs just `sensitivity_km.npz` and the code.
   rule finishes. Keep the machine on mains power and awake during steps 1 and
   3; battery throttling and sleep slow the runs severalfold.
 - One task (seed 7) throughout; noise seeds vary only the input jitter.
+- The cosines in `cosine_km.py` are measured on each rule's own trajectory,
+  with clean inputs, so they differ from the fit diagnostics of
+  `fit_spike_matrix.py` (measured on the exact run's states). At σ = 0 each
+  rule is a single deterministic run, so that point has no spread.
 - A and C are fixed coefficients fitted along one exact trajectory; they
   cannot follow spike-count transitions, where the exact gradient's large
   bursts occur.
