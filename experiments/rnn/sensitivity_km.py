@@ -45,7 +45,13 @@ which it trains in the opposite direction.
   matpre  per-neuron synapse-mixing matrix (fit_matrix.py, "A_per_neuron"):
           each target row of the local gradient is multiplied by its own
           (I + A^(i)) and the result is passed to AdaBelief.
-  matpost the same matrix applied after AdaBelief's normalisation:
+  matk    spike-specific matrices (fit_spike_matrix.py): the eligibility of each
+          output k of target i is multiplied by its own (I + A^(i,k)) as it is
+          accumulated (fastgrad spike_mix), and the result is passed to AdaBelief.
+  matkc   matk plus explicit cross-target terms (fit_spike_matrix.py fitcross):
+          each output's eligibility also gets the learning signal
+          sum_{m != i} sum_c' dL/dt_{c'_m} C^(m,i)_{c'c}; passed to AdaBelief.
+  matpost the per-neuron matrix applied after AdaBelief's normalisation:
           dw = -lr(t) * AdaBelief(g_local) (I + A^(i)).
   localsgd  the local rule (alpha = 0) with the same plain SGD and learning
           rate, so it differs from rank1sgd only by the (1 + alpha) factor.
@@ -80,7 +86,7 @@ from train_noisy import jitter
 
 DATA = "sensitivity_km.npz"
 RULES = ["exact", "local", "rank1", "rank1c", "rank2c", "rank1sgd", "localsgd", "betac",
-         "betat", "matpre", "matpost", "feedback"]
+         "betat", "matpre", "matpost", "matk", "matkc", "feedback"]
 
 
 def build(args):
@@ -129,6 +135,23 @@ def build(args):
             _, (gw, gx) = trace(p[0], p[1], s)
             return mix(gw), gx
         grads["matpre"] = matpre
+    if "matk" in args.rules:
+        spike_trace = make_fast_grad(
+            neuron, trial, trial["cfg"]["Ntar"], "trace",
+            spike_mix=np.array(json.load(open(args.spike_A_fit))["spike_mix"]))
+
+        def matk(p, s):
+            return spike_trace(p[0], p[1], s)[1]
+        grads["matk"] = matk
+    if "matkc" in args.rules:
+        fit_c = json.load(open(args.spike_AC_fit))
+        cross_trace = make_fast_grad(
+            neuron, trial, trial["cfg"]["Ntar"], "trace",
+            spike_mix=np.array(fit_c["spike_mix"]), cross=np.array(fit_c["cross"]))
+
+        def matkc(p, s):
+            return cross_trace(p[0], p[1], s)[1]
+        grads["matkc"] = matkc
     if "feedback" in args.rules:
         from fit_feedback import make_rule as make_feedback
         fb = make_feedback(neuron, trial, json.load(open(args.fb_fit))["B"])
@@ -282,11 +305,14 @@ def stage_plot(args):
                   "localsgd": dict(color="#6250d6", marker="v", label="local, plain SGD"),
                   "betac": dict(color="#eb6834", marker="^", label="constant β"),
                   "betat": dict(color="#1baf7a", marker="D", label="β(t)"),
-                  "matpre": dict(color="#eb6834", marker="v", label="local + matrix A"),
+                  "matpre": dict(color="#6250d6", marker="D", label="local + per-neuron A"),
                   "matpost": dict(color="#e87ba4", marker="P", label="matrix A, after AdaBelief"),
+                  "matk": dict(color="#eb6834", marker="v", label="local + matrix A"),
+                  "matkc": dict(color="#1baf7a", marker="^", label="local + matrix A + cross-target"),
                   "feedback": dict(color="#6250d6", marker="v", label="learning signal (B)")}
     names = {"exact": "exact gradient", "local": "local gradient", "betac": "constant β",
-             "betat": "β(t)", "matpre": "local + matrix A",
+             "betat": "β(t)", "matpre": "local + per-neuron A", "matk": "local + matrix A",
+             "matkc": "A + cross-target",
              "matpost": "A, after AdaBelief",
              "rank1": "rank-1, α inside AdaBelief", "rank1c": "rank-1 rule",
              "rank2c": "rank-2 rule", "rank1sgd": "rank-1, SGD",
@@ -387,6 +413,34 @@ def stage_plot(args):
     fig.savefig(args.out, dpi=170, bbox_inches="tight", facecolor="#fcfcfb")
     print(f"  figure -> {args.out}")
 
+    if args.separate:
+        # each part of the same figure as its own image: <stem>_<part>.png
+        from matplotlib.transforms import Bbox
+        stem = args.out.rsplit(".", 1)[0]
+        leg_c = axes[0, nc].legend(frameon=False, fontsize=7.5)   # C gets its own legend
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        parts = {"loss_curves": list(axes[0, :nc]), "drift_curves": list(axes[1, :nc]),
+                 "final_loss": [axes[0, nc]], "final_drift": [axes[1, nc]]}
+        title = fig._suptitle
+        boxes = {name: Bbox.union([a.get_tightbbox(renderer) for a in axs])
+                 .transformed(fig.dpi_scale_trans.inverted()).padded(0.08)
+                 for name, axs in parts.items()}       # measured while all are visible
+        for name, axs in parts.items():
+            bb = boxes[name]
+            for a in axes.flat:                  # show only this part's panels
+                a.set_visible(any(a is b for b in axs))
+            if title is not None:
+                title.set_visible(False)
+            path = f"{stem}_{name}.png"
+            fig.savefig(path, dpi=200, bbox_inches=bb, facecolor="#fcfcfb")
+            print(f"  part   -> {path}")
+        for a in axes.flat:
+            a.set_visible(True)
+        if title is not None:
+            title.set_visible(True)
+        leg_c.remove()
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -405,8 +459,12 @@ def main():
                     choices=RULES)
     ap.add_argument("--fit", default="lowrank_fit_km.json")
     ap.add_argument("--fb-fit", default="feedback_fit.json")
+    ap.add_argument("--separate", action="store_true",
+                    help="plot: also save each part of the figure as its own image")
     ap.add_argument("--beta-fit", default="beta_fit_km.json")
     ap.add_argument("--A-fit", dest="A_fit", default="A_fit_km.json")
+    ap.add_argument("--spike-A-fit", dest="spike_A_fit", default="spike_A_fit_km.json")
+    ap.add_argument("--spike-AC-fit", dest="spike_AC_fit", default="spike_AC_fit_km.json")
     ap.add_argument("--lr-sgd", type=float, default=3.0,
                     help="initial SGD learning rate for rank1sgd")
     ap.add_argument("--out", default="sensitivity_km.png")
