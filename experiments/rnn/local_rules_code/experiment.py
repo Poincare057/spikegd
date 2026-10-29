@@ -59,8 +59,8 @@ from jax import grad, random  # noqa: E402
 from jaxtyping import Array  # noqa: E402
 
 from experiments.rnn.rnn import init_input, init_target, init_weights, outfn  # noqa: E402
-from spikegd.qif import QIFNeuron  # noqa: E402
 from output_paths import DATA_DIR, FIGS_DIR, ensure_output_dirs, output_file, svg_path  # noqa: E402
+from spikegd.qif import QIFNeuron  # noqa: E402
 
 # %%
 ############################
@@ -163,22 +163,32 @@ def make_trial(cfg: dict, ntar: int, w_scale: float) -> dict:
     """
     Input spikes, targets, input weights and init, exactly as rnn.py.
     """
+
     ### Unpack arguments
     c = dict(cfg)
     c["Ntar"] = ntar
     c["r_targets"] = cfg["r_targets"][:ntar]
+
     ### Input and target spikes
     key = random.PRNGKey(c["seed"])
     key, spikes_in = init_input(key, c)
     weights_in = init_weights(c)
     key, t_targets = init_target(key, c)
+
     ### Initial parameters
     key, subkey = random.split(key)
     w0 = w_scale * random.normal(subkey, (c["N"], c["N"] - 1))
     x0 = jnp.zeros((2, c["N"]))
     denom = float(sum(len(t) for t in t_targets))
-    return dict(cfg=c, spikes_in=spikes_in, weights_in=weights_in,
-                t_targets=t_targets, w0=w0, x0=x0, denom=denom)
+    return dict(
+        cfg=c,
+        spikes_in=spikes_in,
+        weights_in=weights_in,
+        t_targets=t_targets,
+        w0=w0,
+        x0=x0,
+        denom=denom,
+    )
 
 
 # %%
@@ -202,7 +212,7 @@ def lossfn_shared(t_outs: list[Array], t_targets: list[Array], denom: float) -> 
             ((t_out[:-1] - t_target[:-1]) / (t_target[:-1] + 2)) ** 2
         )
         total = total + ((t_out[-1] - t_target[-1]) / (t_target[-1] + 2)) ** 2 * (
-                t_out[-1] < t_target[-1]
+            t_out[-1] < t_target[-1]
         )
     return total / denom
 
@@ -213,10 +223,11 @@ def make_full_loss(neuron: QIFNeuron, trial: dict, mask: Array) -> Callable:
     """
     cfg, denom = trial["cfg"], trial["denom"]
 
-    def loss_fn(w, x0, eps):
+    def loss_fn(w: Array, x0: Array, eps: float | Array) -> Array:
         w_eff = apply_eps(w, mask, eps)
-        out = neuron.event(x0, w_to_weights_net(w_eff), trial["weights_in"],
-                           trial["spikes_in"], cfg)
+        out = neuron.event(
+            x0, w_to_weights_net(w_eff), trial["weights_in"], trial["spikes_in"], cfg
+        )
         t_outs = outfn(neuron, out, [w_eff, x0], trial["t_targets"], cfg)
         return lossfn_shared(t_outs, trial["t_targets"], denom)
 
@@ -245,16 +256,16 @@ def record_surround(
     """
     cfg = trial["cfg"]
     w_eff = apply_eps(w, mask, eps)
-    out = neuron.event(x0, w_to_weights_net(w_eff), trial["weights_in"],
-                       trial["spikes_in"], cfg)
+    out = neuron.event(
+        x0, w_to_weights_net(w_eff), trial["weights_in"], trial["spikes_in"], cfg
+    )
     times, is_in, neurons, xs = out
 
     N, Nin = cfg["N"], trial["weights_in"].shape[1]
     # event -> channel:  external input i -> i
     #                    network spike from j -> Nin + j
     #                    post-trial padding -> Nin + N  (weight pinned to zero)
-    idx = jnp.where(is_in, neurons,
-                    jnp.where(neurons >= 0, Nin + neurons, Nin + N))
+    idx = jnp.where(is_in, neurons, jnp.where(neurons >= 0, Nin + neurons, Nin + N))
     own = (is_in == False) & (neurons == k)  # noqa: E712
     frozen_times = jnp.where((neurons >= 0) & ~own, times, jnp.inf)
 
@@ -281,15 +292,16 @@ def make_frozen_loss(
     t_target_k = trial["t_targets"][k]
     Ntargets = len(t_target_k)
 
-    def loss_fn(w, x0):
+    def loss_fn(w: Array, x0: Array) -> Array:
         # Same parameterisation as the recurrent loss, so masked entries carry
         # the same eps factor in both gradients.
         weights_net = w_to_weights_net(apply_eps(w, mask, eps))
         weights_eff = jnp.concatenate(
             [trial["weights_in"][k], weights_net[k], jnp.zeros(1)]
         )[jnp.newaxis, :]
-        out = neuron.event(x0[:, k][:, jnp.newaxis], jnp.zeros((1, 1)),
-                           weights_eff, queue, single_cfg)
+        out = neuron.event(
+            x0[:, k][:, jnp.newaxis], jnp.zeros((1, 1)), weights_eff, queue, single_cfg
+        )
         times, is_in, neurons, xs = out
         Kord = jnp.sum(neurons >= 0)
         Kout = jnp.sum((neurons == 0) & (is_in == False))  # noqa: E712
@@ -367,13 +379,11 @@ def stage_train(args: argparse.Namespace) -> None:
     ones = jnp.ones_like(trial["w0"])
     loss_full = make_full_loss(neuron, trial, ones)
 
-    schedule = optax.exponential_decay(
-        args.lr, max(args.trials // 5, 1), 1 / jnp.e
-    )
+    schedule = optax.exponential_decay(args.lr, max(args.trials // 5, 1), 1 / jnp.e)
     optim = optax.adabelief(schedule)
 
     @jax.jit
-    def step(p, opt_state):
+    def step(p: tuple, opt_state: optax.OptState) -> tuple:
         loss, grads = jax.value_and_grad(
             lambda q: loss_full(q[0], q[1], jnp.array(1.0))
         )(p)
@@ -385,6 +395,7 @@ def stage_train(args: argparse.Namespace) -> None:
     opt_state = optim.init(p)
     checkpoints = set(args.checkpoints)
     snaps, trace = [], []
+
     ### Training
     t0 = time.time()
     for t in range(args.trials + 1):
@@ -399,8 +410,8 @@ def stage_train(args: argparse.Namespace) -> None:
     with open(SNAPS, "wb") as file:
         pickle.dump({"snaps": snaps, "trace": trace, "args": vars(args)}, file)
     print(f"trained {args.trials} steps in {time.time() - t0:.1f}s")
-    for s, _, _, l in snaps:
-        print(f"  step {s:5d}   loss {l:.5e}")
+    for step_index, _, _, loss in snaps:
+        print(f"  step {step_index:5d}   loss {loss:.5e}")
 
 
 def stage_decompose(args: argparse.Namespace) -> None:
@@ -413,8 +424,11 @@ def stage_decompose(args: argparse.Namespace) -> None:
     trial = make_trial(cfg, args.ntar, args.w_scale)
     with open(SNAPS, "rb") as file:
         snaps = pickle.load(file)["snaps"]
-    mask = (sink_mask(cfg["N"], args.k) if args.arch == "sink"
-            else acyclic_mask(cfg["N"], args.k, range(args.k + 1, args.k + 1 + args.n_down)))
+    mask = (
+        sink_mask(cfg["N"], args.k)
+        if args.arch == "sink"
+        else acyclic_mask(cfg["N"], args.k, range(args.k + 1, args.k + 1 + args.n_down))
+    )
 
     out = {}
     if DECOMP.exists():
@@ -423,13 +437,15 @@ def stage_decompose(args: argparse.Namespace) -> None:
     for eps in args.eps:
         t0 = time.time()
         rows = []
-        for (s, w, x0, tr_loss) in snaps:
+        for s, w, x0, tr_loss in snaps:
             m = decompose(neuron, trial, w, x0, eps, args.k, mask)
             m["step"], m["train_loss"] = s, tr_loss
             rows.append(m)
         out[f"{args.arch}:{eps}"] = rows
-        print(f"  eps {eps:<5} {time.time() - t0:5.1f}s   "
-              + "  ".join(f"{r['step']}:{r['rho_pct']:.2f}%" for r in rows))
+        print(
+            f"  eps {eps:<5} {time.time() - t0:5.1f}s   "
+            + "  ".join(f"{r['step']}:{r['rho_pct']:.2f}%" for r in rows)
+        )
     with open(DECOMP, "w") as file:
         json.dump(out, file)
 
@@ -457,15 +473,21 @@ def stage_partitions(args: argparse.Namespace) -> None:
         for _ in range(args.n_partitions):
             # neuron 1 is the extra loss neuron and is always downstream, so a
             # non-returning path always exists; the rest of D is random.
-            D = sorted([1] + [int(v) for v in rng.choice(
-                pool, size=args.n_down - 1, replace=False)])
-            m = decompose(neuron, trial, w, x0, 0.0, k,
-                          acyclic_mask(N, k, D))
+            D = sorted(
+                [1]
+                + [
+                    int(v)
+                    for v in rng.choice(pool, size=args.n_down - 1, replace=False)
+                ]
+            )
+            m = decompose(neuron, trial, w, x0, 0.0, k, acyclic_mask(N, k, D))
             m["weights"], m["D"] = label, D
             out.append(m)
         v = [r["rho_pct"] for r in out if r["weights"] == label]
-        print(f"  {label:<14} min {min(v):6.3f}%   median "
-              f"{float(np.median(v)):6.3f}%   max {max(v):7.3f}%")
+        print(
+            f"  {label:<14} min {min(v):6.3f}%   median "
+            f"{float(np.median(v)):6.3f}%   max {max(v):7.3f}%"
+        )
     with open(PARTS, "w") as file:
         json.dump(out, file)
 
@@ -478,6 +500,7 @@ def stage_partitions(args: argparse.Namespace) -> None:
 
 def stage_figure(args: argparse.Namespace) -> None:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -487,13 +510,15 @@ def stage_figure(args: argparse.Namespace) -> None:
     with open(PARTS) as file:
         part = json.load(file)
 
-    def curves(arch):
+    def curves(arch: str) -> dict:
         """{eps: rows} for one architecture, sorted by eps."""
-        return {float(key.split(":")[1]): dec[key]
-                for key in dec if key.startswith(arch + ":")}
+        return {
+            float(key.split(":")[1]): dec[key]
+            for key in dec
+            if key.startswith(arch + ":")
+        }
 
-    STYLE = {"sink": dict(ls="-", marker="o"),
-             "acyclic": dict(ls="--", marker="s")}
+    STYLE = {"sink": dict(ls="-", marker="o"), "acyclic": dict(ls="--", marker="s")}
     COL = {"sink": "#2b6cb0", "acyclic": "#c53030"}
     arches = [a for a in ("sink", "acyclic") if curves(a)]
 
@@ -504,11 +529,23 @@ def stage_figure(args: argparse.Namespace) -> None:
     for arch in arches:
         c = curves(arch)
         nz = sorted(e for e in c if e > 0)
-        ax.plot(nz, [c[e][0]["rho_pct"] for e in nz], color=COL[arch],
-                lw=1.6, ms=5, label=arch, **STYLE[arch])
+        ax.plot(
+            nz,
+            [c[e][0]["rho_pct"] for e in nz],
+            color=COL[arch],
+            lw=1.6,
+            ms=5,
+            label=arch,
+            **STYLE[arch],
+        )
     ax.plot([0], [0], "o", color="k", ms=6)
-    ax.annotate(r"$\epsilon=0$:  $\rho=0$", xy=(0, 0), xytext=(0.12, 0.35),
-                fontsize=8, arrowprops=dict(arrowstyle="->", lw=0.8))
+    ax.annotate(
+        r"$\epsilon=0$:  $\rho=0$",
+        xy=(0, 0),
+        xytext=(0.12, 0.35),
+        fontsize=8,
+        arrowprops=dict(arrowstyle="->", lw=0.8),
+    )
     ax.set_xlabel(r"$\epsilon$   (0 = reduced, 1 = intact)")
     ax.set_ylabel(r"non-local share  $\rho$  (%)")
     ax.set_title("A   at initialisation", loc="left", fontsize=10)
@@ -523,17 +560,37 @@ def stage_figure(args: argparse.Namespace) -> None:
         c = curves(arch)
         for e, alpha in [(0.25, 0.45), (0.5, 1.0)]:
             if e in c:
-                ax.plot([r["step"] for r in c[e]], [r["rho_pct"] for r in c[e]],
-                        color=COL[arch], alpha=alpha, lw=1.6, ms=4,
-                        label=rf"{arch}, $\epsilon$={e:g}", **STYLE[arch])
+                ax.plot(
+                    [r["step"] for r in c[e]],
+                    [r["rho_pct"] for r in c[e]],
+                    color=COL[arch],
+                    alpha=alpha,
+                    lw=1.6,
+                    ms=4,
+                    label=rf"{arch}, $\epsilon$={e:g}",
+                    **STYLE[arch],
+                )
     # at eps = 1 the mask is inert, so both conditions are the intact network
     intact = curves(arches[0]).get(1.0)
     if intact:
-        ax.plot([r["step"] for r in intact], [r["rho_pct"] for r in intact],
-                color="k", lw=1.8, ms=4, marker="^", label=r"intact ($\epsilon$=1)")
+        ax.plot(
+            [r["step"] for r in intact],
+            [r["rho_pct"] for r in intact],
+            color="k",
+            lw=1.8,
+            ms=4,
+            marker="^",
+            label=r"intact ($\epsilon$=1)",
+        )
     ax.axhline(100, color="#666", ls=":", lw=1)
-    ax.text(0.03, 0.93, "local gradient fully wrong", transform=ax.transAxes,
-            fontsize=7.5, color="#666")
+    ax.text(
+        0.03,
+        0.93,
+        "local gradient fully wrong",
+        transform=ax.transAxes,
+        fontsize=7.5,
+        color="#666",
+    )
     ax.set_yscale("log")
     ax.set_yticks([1, 10, 100])
     ax.set_yticklabels(["1%", "10%", "100%"])
@@ -559,8 +616,11 @@ def stage_figure(args: argparse.Namespace) -> None:
     ax.set_xticklabels(labels)
     ax.set_xlim(-0.5, len(labels) - 0.5 + 0.65)
     ax.set_ylabel(r"$\rho$  (%)")
-    ax.set_title(r"C   acyclic, $\epsilon=0$: partitions at fixed $|\mathcal{D}|$",
-                 loc="left", fontsize=10)
+    ax.set_title(
+        r"C   acyclic, $\epsilon=0$: partitions at fixed $|\mathcal{D}|$",
+        loc="left",
+        fontsize=10,
+    )
     ax.grid(alpha=0.3, lw=0.5, axis="y")
 
     fig.tight_layout()
@@ -591,29 +651,24 @@ def train_masked(
     restricted weight space rather than being perturbed at the end.
     """
     loss_full = make_full_loss(neuron, trial, mask)
-    optim = optax.adabelief(
-        optax.exponential_decay(lr, max(trials // 5, 1), 1 / jnp.e)
-    )
+    optim = optax.adabelief(optax.exponential_decay(lr, max(trials // 5, 1), 1 / jnp.e))
 
     @jax.jit
-    def step(p, s):
-        loss, g = jax.value_and_grad(
-            lambda q: loss_full(q[0], q[1], jnp.array(0.0))
-        )(p)
-        u, s = optim.update(g, s)
-        return optax.apply_updates(p, u), s, loss
+    def step(p: tuple, opt_state: optax.OptState) -> tuple:
+        loss, g = jax.value_and_grad(lambda q: loss_full(q[0], q[1], jnp.array(0.0)))(p)
+        updates, opt_state = optim.update(g, opt_state)
+        return optax.apply_updates(p, updates), opt_state, loss
 
     p = (trial["w0"], trial["x0"])
-    s = optim.init(p)
+    opt_state = optim.init(p)
     ckpt = set(checkpoints or [])
     snaps = []
     for t in range(trials + 1):
         if t in ckpt:
-            snaps.append((t, p[0], p[1],
-                          float(loss_full(p[0], p[1], jnp.array(0.0)))))
+            snaps.append((t, p[0], p[1], float(loss_full(p[0], p[1], jnp.array(0.0)))))
         if t == trials:
             break
-        p, s, loss = step(p, s)
+        p, opt_state, loss = step(p, opt_state)
     if checkpoints is not None:
         return p[0], p[1], float(loss), snaps
     return p[0], p[1], float(loss)
@@ -639,22 +694,27 @@ def stage_converge(args: argparse.Namespace) -> None:
     out = {}
     for name in args.conds:
         mask = masks[name]
-        *_, snaps = train_masked(neuron, trial, mask, args.trials, args.lr, k,
-                                 checkpoints=args.checkpoints)
+        *_, snaps = train_masked(
+            neuron, trial, mask, args.trials, args.lr, k, checkpoints=args.checkpoints
+        )
         rows = []
-        for (t, w, x0, tr_loss) in snaps:
+        for t, w, x0, tr_loss in snaps:
             m = decompose(neuron, trial, w, x0, 0.0, k, mask)
             m["step"], m["train_loss"] = t, tr_loss
             rows.append(m)
         out[name] = rows
         print(f"\n  {name}   (mask in force during training, rho at eps=0)")
-        print(f"  {'step':>6} {'train L':>11} | {'|g_exact|':>10} "
-              f"{'|g_nonloc|':>11} {'rho':>8} {'cos':>10} {'Kout':>5}")
+        print(
+            f"  {'step':>6} {'train L':>11} | {'|g_exact|':>10} "
+            f"{'|g_nonloc|':>11} {'rho':>8} {'cos':>10} {'Kout':>5}"
+        )
         print("  " + "-" * 68)
         for m in rows:
-            print(f"  {m['step']:6d} {m['train_loss']:11.4e} | "
-                  f"{m['norm_exact']:10.3e} {m['norm_nonlocal']:11.3e} "
-                  f"{m['rho_pct']:7.3f}% {m['cos']:10.6f} {m['Kout']:5d}")
+            print(
+                f"  {m['step']:6d} {m['train_loss']:11.4e} | "
+                f"{m['norm_exact']:10.3e} {m['norm_nonlocal']:11.3e} "
+                f"{m['rho_pct']:7.3f}% {m['cos']:10.6f} {m['Kout']:5d}"
+            )
     with open(DATA_DIR / "converge.json", "w") as file:
         json.dump(out, file)
 
@@ -677,8 +737,13 @@ def spike_trains(
     Ordinary spike times of every neuron, as a list of sorted arrays.
     """
     cfg = trial["cfg"]
-    out = neuron.event(x0, w_to_weights_net(apply_eps(w, mask, eps)),
-                       trial["weights_in"], trial["spikes_in"], cfg)
+    out = neuron.event(
+        x0,
+        w_to_weights_net(apply_eps(w, mask, eps)),
+        trial["weights_in"],
+        trial["spikes_in"],
+        cfg,
+    )
     times, is_in, neurons, _ = out
     t = np.asarray(times)
     net = (~np.asarray(is_in)) & (np.asarray(neurons) >= 0)
@@ -731,10 +796,14 @@ def stage_structural(args: argparse.Namespace) -> None:
     print("  " + "-" * 42)
     for r in rows:
         s = "K" if r["neuron"] == k else ("D" if r["neuron"] in D else "U")
-        print(f"  {r['neuron']:>6} {s:>5} {r['n_a']:>7} {r['n_b']:>7} "
-              f"{r['dmax']:>11.3e}")
-    bad = [r for r in rows if r["neuron"] in U
-           and (r["n_a"] != r["n_b"] or r["dmax"] > 1e-10)]
+        print(
+            f"  {r['neuron']:>6} {s:>5} {r['n_a']:>7} {r['n_b']:>7} {r['dmax']:>11.3e}"
+        )
+    bad = [
+        r
+        for r in rows
+        if r["neuron"] in U and (r["n_a"] != r["n_b"] or r["dmax"] > 1e-10)
+    ]
     print(f"\n  U unchanged: {'YES' if not bad else 'NO  <-- structural bug'}")
 
 
@@ -762,27 +831,36 @@ def stage_retrain(args: argparse.Namespace) -> None:
         trained[name] = (w, x0, mask)
         print(f"  {name:<8} final loss {loss:.5e}   ({time.time() - t0:.0f}s)")
 
-    ref = spike_trains(neuron, trial, *trained["intact"][:2],
-                       trained["intact"][2], 0.0)
+    ref = spike_trains(neuron, trial, *trained["intact"][:2], trained["intact"][2], 0.0)
     print(f"\n  D = {D}     U = {U}\n")
     for name in ("sink", "acyclic"):
         w, x0, mask = trained[name]
         rows = compare_trains(ref, spike_trains(neuron, trial, w, x0, mask, 0.0))
         out[name] = rows
         print(f"  {name} vs intact")
-        print(f"  {'neuron':>6} {'set':>5} {'n intact':>9} {'n cond':>7} "
-              f"{'max |dt|':>11}")
+        print(
+            f"  {'neuron':>6} {'set':>5} {'n intact':>9} {'n cond':>7} {'max |dt|':>11}"
+        )
         print("  " + "-" * 44)
         for r in rows:
             s = "K" if r["neuron"] == k else ("D" if r["neuron"] in D else "U")
-            print(f"  {r['neuron']:>6} {s:>5} {r['n_a']:>9} {r['n_b']:>7} "
-                  f"{r['dmax']:>11.3e}")
-        same_U = all(r["n_a"] == r["n_b"] and not (r["dmax"] > 1e-10)
-                     for r in rows if r["neuron"] in U)
-        same_D = all(r["n_a"] == r["n_b"] and not (r["dmax"] > 1e-10)
-                     for r in rows if r["neuron"] in D)
-        print(f"    U identical to intact: {same_U}     "
-              f"D identical to intact: {same_D}\n")
+            print(
+                f"  {r['neuron']:>6} {s:>5} {r['n_a']:>9} {r['n_b']:>7} "
+                f"{r['dmax']:>11.3e}"
+            )
+        same_U = all(
+            r["n_a"] == r["n_b"] and not (r["dmax"] > 1e-10)
+            for r in rows
+            if r["neuron"] in U
+        )
+        same_D = all(
+            r["n_a"] == r["n_b"] and not (r["dmax"] > 1e-10)
+            for r in rows
+            if r["neuron"] in D
+        )
+        print(
+            f"    U identical to intact: {same_U}     D identical to intact: {same_D}\n"
+        )
     with open(DATA_DIR / "retrain.json", "w") as file:
         json.dump(out, file)
 
@@ -795,9 +873,18 @@ def stage_retrain(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["train", "decompose", "partitions",
-                                      "figure", "retrain", "structural",
-                                      "converge"])
+    parser.add_argument(
+        "stage",
+        choices=[
+            "train",
+            "decompose",
+            "partitions",
+            "figure",
+            "retrain",
+            "structural",
+            "converge",
+        ],
+    )
     parser.add_argument("--k", type=int, default=0, help="reference neuron")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--ntar", type=int, default=1)
@@ -806,15 +893,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-down", type=int, default=5, help="|D|")
     parser.add_argument("--trials", type=int, default=400)
     parser.add_argument("--lr", type=float, default=1e-2)
-    parser.add_argument("--checkpoints", type=int, nargs="+",
-                    default=[0, 10, 25, 50, 100, 200, 400])
-    parser.add_argument("--eps", type=float, nargs="+",
-                    default=[0.0, 0.25, 0.5, 1.0])
+    parser.add_argument(
+        "--checkpoints", type=int, nargs="+", default=[0, 10, 25, 50, 100, 200, 400]
+    )
+    parser.add_argument("--eps", type=float, nargs="+", default=[0.0, 0.25, 0.5, 1.0])
     parser.add_argument("--n-partitions", type=int, default=6)
     parser.add_argument("--part-seed", type=int, default=0)
-    parser.add_argument("--out", type=svg_path, default=str(FIGS_DIR / "main_figure.svg"))
-    parser.add_argument("--conds", nargs="+", default=["sink", "acyclic"],
-                    choices=["sink", "acyclic"])
+    parser.add_argument(
+        "--out", type=svg_path, default=str(FIGS_DIR / "main_figure.svg")
+    )
+    parser.add_argument(
+        "--conds", nargs="+", default=["sink", "acyclic"], choices=["sink", "acyclic"]
+    )
     args = parser.parse_args()
     return args
 
@@ -824,10 +914,15 @@ def main() -> None:
     ensure_output_dirs()
     if args.stage == "figure":
         args.out = output_file(args.out)
-    {"train": stage_train, "decompose": stage_decompose,
-     "partitions": stage_partitions, "figure": stage_figure,
-     "retrain": stage_retrain, "structural": stage_structural,
-     "converge": stage_converge}[args.stage](args)
+    {
+        "train": stage_train,
+        "decompose": stage_decompose,
+        "partitions": stage_partitions,
+        "figure": stage_figure,
+        "retrain": stage_retrain,
+        "structural": stage_structural,
+        "converge": stage_converge,
+    }[args.stage](args)
 
 
 if __name__ == "__main__":

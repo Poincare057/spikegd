@@ -34,13 +34,15 @@ from collections.abc import Callable
 from functools import partial
 
 import experiment as ex  # Sets JAX CPU and float64 flags before importing JAX.
+
+# isort: split
+
 import jax
 import jax.numpy as jnp
 from jax import lax
 from jaxtyping import Array
 
 from spikegd.qif import QIFNeuron
-
 
 # %%
 ############################
@@ -119,8 +121,9 @@ def make_fast_grad(
     (N - ntar, Kh, N), network layout) and their spike counts ("HC").
     """
     assert mode in ("trace", "closed")
-    assert (spike_mix is None and cross is None and offtarget is None
-            and not return_pieces) or mode == "trace"
+    assert (
+        spike_mix is None and cross is None and offtarget is None and not return_pieces
+    ) or mode == "trace"
 
     ### Unpack arguments
     cfg: dict = trial["cfg"]
@@ -135,13 +138,13 @@ def make_fast_grad(
     # column indices that drop the diagonal: (N, N) -> spikegd's (N, N-1) layout
     OFFDIAG = jnp.array([[j for j in range(N) if j != i] for i in range(N)])
 
-    def dloss_dt(k, c, t):
+    def dloss_dt(k: int, c: Array, t: Array) -> Array:
         """dL/dt for the c-th output spike of target k occurring at time t."""
         tar = tars[k][jnp.minimum(c, ns[k] - 1)]
         gate = jnp.where(c == ns[k] - 1, t < tar, True) & (c < ns[k])
         return jnp.where(gate, 2 * (t - tar) / (tar + 2) ** 2 / denom, 0.0)
 
-    def loss_terms(k, ts, active):
+    def loss_terms(k: int, ts: Array, active: Array) -> Array:
         """Sum of loss terms of target k for output times ts (len n_k)."""
         tar = tars[k]
         cs = jnp.arange(ns[k])
@@ -161,7 +164,7 @@ def make_fast_grad(
     NT = N if hidden else ntar  # neurons whose eligibilities are traced
     store = CROSS is not None or hidden  # keep per-output dL/dt of the targets
 
-    def mixed(k, c, vec):
+    def mixed(k: int, c: Array, vec: Array) -> Array:
         """Apply (I + A^(k,c)) to the weight part of a (D,) eligibility vector."""
         if MIX is None:
             return vec
@@ -173,34 +176,46 @@ def make_fast_grad(
         ### Initialize the simulation
         wn = ex.w_to_weights_net(w)
         order = jnp.argsort(spikes_in[0])
-        spikes = (jnp.append(spikes_in[0][order], jnp.inf),
-                  jnp.append(spikes_in[1][order], 0))
+        spikes = (
+            jnp.append(spikes_in[0][order], jnp.inf),
+            jnp.append(spikes_in[1][order], 0),
+        )
         state = (jnp.array(0.0), x0, neuron.dt_spike(x0), jnp.array(0))
 
         nmax = max(ns)
-        tr = {"cnt": jnp.zeros(NT, int), "g": jnp.zeros((ntar, D)),
-              "tord": jnp.full((ntar, nmax), jnp.inf)}
+        tr = {
+            "cnt": jnp.zeros(NT, int),
+            "g": jnp.zeros((ntar, D)),
+            "tord": jnp.full((ntar, nmax), jnp.inf),
+        }
         if mode == "trace":
             z0 = jnp.zeros((2, D)).at[0, N].set(1.0).at[1, N + 1].set(1.0)
             tr["z"] = jnp.stack([z0] * NT)  # (NT, 2, D)
             tr["tau"] = jnp.zeros((NT, D))  # d(event time)
-            tr["sig"] = jnp.stack([grad_dt_spike(x0[:, k]) @ z0  # d(next spike of k)
-                                   for k in range(NT)])
+            tr["sig"] = jnp.stack(
+                [
+                    grad_dt_spike(x0[:, k]) @ z0  # d(next spike of k)
+                    for k in range(NT)
+                ]
+            )
             if store:
                 tr["EL"] = jnp.zeros((ntar, nmax, D))  # eligibility of each output
                 tr["DL"] = jnp.zeros((ntar, nmax))  # dL/dt of each output
             if hidden:
-                tr["EH"] = jnp.zeros((N - ntar, Kh, D))  # eligibility of each hidden spike
+                tr["EH"] = jnp.zeros(
+                    (N - ntar, Kh, D)
+                )  # eligibility of each hidden spike
         else:
             tr["P"] = jnp.zeros(N)
             tr["s"] = jnp.stack([grad_dt_spike(x0[:, k])[1] for k in range(ntar)])
 
         ### Event and eligibility update
-        def step(carry: tuple, _) -> tuple:
+        def step(carry: tuple, _: None) -> tuple:
             state, tr = carry
             t_old, x_old, dtn_old, _ = state
             state_new, (t_new, spike_in, j, x_new) = neuron.spike(
-                state, wn, weights_in, spikes, cfg)
+                state, wn, weights_in, spikes, cfg
+            )
             dt = t_new - t_old
             j_net = jnp.argmin(dtn_old)
             net_spike = (~spike_in) & (j >= 0)
@@ -223,9 +238,11 @@ def make_fast_grad(
                     zn = zn.at[1].add(jnp.where(send, jax.nn.one_hot(j_net, D), 0.0))
                     zn = zn.at[0].set(jnp.where(is_k, 0.0, zn[0]))  # reset
                     recomputed = (~mask[k]) | ((j_net == k) & ~spike_in)
-                    sig = jnp.where(recomputed,
-                                    tau_new + grad_dt_spike(x_new[:, k]) @ zn,
-                                    tr["sig"][k])
+                    sig = jnp.where(
+                        recomputed,
+                        tau_new + grad_dt_spike(x_new[:, k]) @ zn,
+                        tr["sig"][k],
+                    )
                     c = cnt[k]
                     if k < ntar:
                         dl = jnp.where(is_k, dloss_dt(k, c, t_new), 0.0)
@@ -233,18 +250,32 @@ def make_fast_grad(
                         if store:
                             ok = is_k & (c < ns[k])
                             ci = jnp.minimum(c, nmax - 1)
-                            tr["EL"] = tr["EL"].at[k, ci].set(
-                                jnp.where(ok, tau_new, tr["EL"][k, ci]))
-                            tr["DL"] = tr["DL"].at[k, ci].set(jnp.where(ok, dl, tr["DL"][k, ci]))
+                            tr["EL"] = (
+                                tr["EL"]
+                                .at[k, ci]
+                                .set(jnp.where(ok, tau_new, tr["EL"][k, ci]))
+                            )
+                            tr["DL"] = (
+                                tr["DL"]
+                                .at[k, ci]
+                                .set(jnp.where(ok, dl, tr["DL"][k, ci]))
+                            )
                     else:
                         ok = is_k & (c < Kh)
                         ci = jnp.minimum(c, Kh - 1)
-                        tr["EH"] = tr["EH"].at[k - ntar, ci].set(
-                            jnp.where(ok, tau_new, tr["EH"][k - ntar, ci]))
+                        tr["EH"] = (
+                            tr["EH"]
+                            .at[k - ntar, ci]
+                            .set(jnp.where(ok, tau_new, tr["EH"][k - ntar, ci]))
+                        )
                     zs.append(zn)
                     taus.append(tau_new)
                     sigs.append(sig)
-                tr["z"], tr["tau"], tr["sig"] = jnp.stack(zs), jnp.stack(taus), jnp.stack(sigs)
+                tr["z"], tr["tau"], tr["sig"] = (
+                    jnp.stack(zs),
+                    jnp.stack(taus),
+                    jnp.stack(sigs),
+                )
             else:
                 P_prev = tr["P"]
                 ss = []
@@ -254,8 +285,9 @@ def make_fast_grad(
                     coef = jnp.where(is_k, dloss_dt(k, c, t_new), 0.0) * tr["s"][k]
                     g = g.at[k, :N].add(coef * P_prev)
                     recomputed = (~mask[k]) | ((j_net == k) & ~spike_in)
-                    ss.append(jnp.where(recomputed, grad_dt_spike(x_new[:, k])[1],
-                                        tr["s"][k]))
+                    ss.append(
+                        jnp.where(recomputed, grad_dt_spike(x_new[:, k])[1], tr["s"][k])
+                    )
                 tr["s"] = jnp.stack(ss)
                 P = P_prev * jnp.exp(-2 * dt / neuron.tau)
                 tr["P"] = P + jnp.where(net_spike, jax.nn.one_hot(j_net, N), 0.0)
@@ -266,7 +298,8 @@ def make_fast_grad(
                 if k < ntar:
                     ok = is_k & (c < ns[k])
                     tord = tord.at[k, jnp.minimum(c, nmax - 1)].set(
-                        jnp.where(ok, t_new, tord[k, jnp.minimum(c, nmax - 1)]))
+                        jnp.where(ok, t_new, tord[k, jnp.minimum(c, nmax - 1)])
+                    )
                 cnt = cnt.at[k].add(is_k.astype(int))
             tr["cnt"], tr["g"], tr["tord"] = cnt, g, tord
             return (state_new, tr), None
@@ -289,14 +322,19 @@ def make_fast_grad(
                 tp = neuron.t_pseudo(xk, neuron.linear(rates, wrow), cs + 1 - Kout, cfg)
                 return loss_terms(k, tp, cs >= Kout)
 
-            lp, (gx, gwr) = jax.value_and_grad(fpseudo, argnums=(0, 1))(x_end[:, k], wn[k])
+            lp, (gx, gwr) = jax.value_and_grad(fpseudo, argnums=(0, 1))(
+                x_end[:, k], wn[k]
+            )
             loss = loss + lp
             if mode == "trace" and MIX is not None:
                 # per-output pseudospike terms, so each gets its own (I + A^(k,c))
                 def fterms(xk, wrow, k=k, n=n, Kout=Kout, cs=cs):
-                    tp = neuron.t_pseudo(xk, neuron.linear(rates, wrow), cs + 1 - Kout, cfg)
-                    return jnp.stack([loss_terms(k, tp, (cs >= Kout) & (cs == c))
-                                      for c in range(n)])
+                    tp = neuron.t_pseudo(
+                        xk, neuron.linear(rates, wrow), cs + 1 - Kout, cfg
+                    )
+                    return jnp.stack(
+                        [loss_terms(k, tp, (cs >= Kout) & (cs == c)) for c in range(n)]
+                    )
 
                 jx, jw = jax.jacrev(fterms, argnums=(0, 1))(x_end[:, k], wn[k])
                 for c in range(n):
@@ -310,7 +348,9 @@ def make_fast_grad(
             if store:
                 # store eligibility and dL/dt of this neuron's pseudospike outputs
                 def ftimes(xk, wrow, n=n, Kout=Kout, cs=cs):
-                    return neuron.t_pseudo(xk, neuron.linear(rates, wrow), cs + 1 - Kout, cfg)
+                    return neuron.t_pseudo(
+                        xk, neuron.linear(rates, wrow), cs + 1 - Kout, cfg
+                    )
 
                 tp = ftimes(x_end[:, k], wn[k])
                 jtx, jtw = jax.jacrev(ftimes, argnums=(0, 1))(x_end[:, k], wn[k])
@@ -318,30 +358,46 @@ def make_fast_grad(
                     pseudo = c >= Kout
                     el = jtx[c] @ tr["z"][k] + jnp.concatenate([jtw[c], jnp.zeros(2)])
                     dl = dloss_dt(k, jnp.array(c), tp[c])
-                    tr["EL"] = tr["EL"].at[k, c].set(jnp.where(pseudo, el, tr["EL"][k, c]))
-                    tr["DL"] = tr["DL"].at[k, c].set(jnp.where(pseudo, dl, tr["DL"][k, c]))
+                    tr["EL"] = (
+                        tr["EL"].at[k, c].set(jnp.where(pseudo, el, tr["EL"][k, c]))
+                    )
+                    tr["DL"] = (
+                        tr["DL"].at[k, c].set(jnp.where(pseudo, dl, tr["DL"][k, c]))
+                    )
 
         ### Fitted non-local corrections
         if CROSS is not None:
             # explicit cross-target term: sum_c S_ic e_i.(t_c), with
             # S_ic = sum_{m != i} sum_c' dL/dt_{c'_m} C[m, i, c', c]
             for i in range(ntar):
-                S = sum(tr["DL"][m] @ CROSS[m, i] for m in range(ntar) if m != i)  # (nmax,)
-                g = g.at[i, :N].add(S[:ns[i]] @ tr["EL"][i, :ns[i], :N])
+                S = sum(
+                    tr["DL"][m] @ CROSS[m, i] for m in range(ntar) if m != i
+                )  # (nmax,)
+                g = g.at[i, :N].add(S[: ns[i]] @ tr["EL"][i, : ns[i], :N])
 
         gw_net = jnp.zeros((N, N)).at[:ntar].set(g[:, :N])
         if OFFT is not None:
             # non-target rows: sum_c S_lc e_l.(t_{c_l}), with
             # S_lc = sum_m sum_c' dL/dt_{c'_m} C[l - ntar, m, c', c]
             S = jnp.einsum("mc,lmcd->ld", tr["DL"], OFFT)  # (N - ntar, Kh)
-            gw_net = gw_net.at[ntar:].set(jnp.einsum("ld,ldj->lj", S, tr["EH"][:, :, :N]))
+            gw_net = gw_net.at[ntar:].set(
+                jnp.einsum("ld,ldj->lj", S, tr["EH"][:, :, :N])
+            )
 
         ### Convert gradients to the learnable parameter layout
         gw = jnp.take_along_axis(gw_net, OFFDIAG, axis=1)
         gx0 = jnp.zeros((2, N)).at[:, :ntar].set(g[:, N:].T)
         if return_pieces:
-            return loss, (gw, gx0), {"DL": tr["DL"], "EL": tr["EL"][:, :, :N],
-                                     "EH": tr["EH"][:, :, :N], "HC": tr["cnt"][ntar:]}
+            return (
+                loss,
+                (gw, gx0),
+                {
+                    "DL": tr["DL"],
+                    "EL": tr["EL"][:, :, :N],
+                    "EH": tr["EH"][:, :, :N],
+                    "HC": tr["cnt"][ntar:],
+                },
+            )
         return loss, (gw, gx0)
 
     return gradfn
@@ -363,6 +419,7 @@ def make_eligibility(neuron: QIFNeuron, trial: dict) -> Callable:
     every other neuron's spike times are held fixed, neuron i's own dynamics
     (including its earlier spikes and resets) are propagated.
     """
+
     ### Unpack arguments
     cfg: dict = trial["cfg"]
     N: int = cfg["N"]
@@ -375,7 +432,20 @@ def make_eligibility(neuron: QIFNeuron, trial: dict) -> Callable:
     grad_dt_spike = partial(_grad_dt_spike, neuron)
     flow_jvp = _make_flow_jvp(neuron)
 
-    def per_neuron(k, xo, xn, mask_k, z, tau, sig, eb, dt, j_net, net_spike, spike_in):
+    def per_neuron(
+        k: Array,
+        xo: Array,
+        xn: Array,
+        mask_k: Array,
+        z: Array,
+        tau: Array,
+        sig: Array,
+        eb: Array,
+        dt: Array,
+        j_net: Array,
+        net_spike: Array,
+        spike_in: Array,
+    ) -> tuple:
         is_k = net_spike & (j_net == k)
         tau_new = jnp.where(is_k, sig, 0.0)  # surround spike times are fixed
         ddt = tau_new - tau
@@ -391,30 +461,46 @@ def make_eligibility(neuron: QIFNeuron, trial: dict) -> Callable:
         eb = eb + jnp.where(is_k, tau_new, 0.0)
         return zn, tau_new, sig, eb
 
-    step_all = jax.vmap(per_neuron, in_axes=(0, 1, 1, 0, 0, 0, 0, 0,
-                                             None, None, None, None))
+    step_all = jax.vmap(
+        per_neuron, in_axes=(0, 1, 1, 0, 0, 0, 0, 0, None, None, None, None)
+    )
 
     def eligibilityfn(w: Array, x0: Array, spikes_in: tuple) -> Array:
         ### Initialize the simulation
         wn = ex.w_to_weights_net(w)
         order = jnp.argsort(spikes_in[0])
-        spikes = (jnp.append(spikes_in[0][order], jnp.inf),
-                  jnp.append(spikes_in[1][order], 0))
+        spikes = (
+            jnp.append(spikes_in[0][order], jnp.inf),
+            jnp.append(spikes_in[1][order], 0),
+        )
         state = (jnp.array(0.0), x0, neuron.dt_spike(x0), jnp.array(0))
         z0 = jnp.zeros((N, 2, N))
         tr = (z0, jnp.zeros((N, N)), jnp.zeros((N, N)), jnp.zeros((N, N)))
 
-        def step(carry, _):
+        def step(carry: tuple, _: None) -> tuple:
             state, (z, tau, sig, eb) = carry
             t_old, x_old, dtn_old, _ = state
             state_new, (t_new, spike_in, j, x_new) = neuron.spike(
-                state, wn, weights_in, spikes, cfg)
+                state, wn, weights_in, spikes, cfg
+            )
             dt = t_new - t_old
             j_net = jnp.argmin(dtn_old)
             net_spike = (~spike_in) & (j >= 0)
             mask = jnp.abs(dtn_old - dt) < eps
-            tr = step_all(jnp.arange(N), x_old, x_new, mask, z, tau, sig, eb,
-                          dt, j_net, net_spike, spike_in)
+            tr = step_all(
+                jnp.arange(N),
+                x_old,
+                x_new,
+                mask,
+                z,
+                tau,
+                sig,
+                eb,
+                dt,
+                j_net,
+                net_spike,
+                spike_in,
+            )
             return (state_new, tr), None
 
         ### Simulation

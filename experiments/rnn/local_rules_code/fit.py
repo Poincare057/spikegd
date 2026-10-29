@@ -31,14 +31,17 @@ import time
 from collections.abc import Callable
 
 import experiment as ex  # sets JAX_PLATFORMS / JAX_ENABLE_X64 on import
+
+# isort: split
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from spikegd.qif import QIFNeuron
 
 from fastgrad import make_fast_grad
 from output_paths import DATA_DIR, ensure_output_dirs, output_file
+from spikegd.qif import QIFNeuron
 
 # %%
 ############################
@@ -76,13 +79,22 @@ def collect(args: argparse.Namespace) -> None:
     """
     Records exact gradients and eligibility traces along one training run.
     """
+
     ### Set up the simulation
     cfg, neuron, trial = setup()
     ntar = cfg["Ntar"]
     one = jnp.array(1.0)
     full = ex.make_full_loss(neuron, trial, jnp.ones_like(trial["w0"]))
-    pieces = jax.jit(make_fast_grad(neuron, trial, ntar, "trace",
-                                    n_hidden_spikes=args.n_hidden, return_pieces=True))
+    pieces = jax.jit(
+        make_fast_grad(
+            neuron,
+            trial,
+            ntar,
+            "trace",
+            n_hidden_spikes=args.n_hidden,
+            return_pieces=True,
+        )
+    )
     optim = optax.adabelief(optax.exponential_decay(1e-2, 2000, 1 / jnp.e))
 
     # Update step
@@ -95,6 +107,7 @@ def collect(args: argparse.Namespace) -> None:
     p = (trial["w0"], trial["x0"])
     opt_state = optim.init(p)
     rec = {k: [] for k in ("DL", "EL", "EH", "G", "trial")}
+
     ### Training and recordings
     t0 = time.time()
     for t in range(args.trials):
@@ -107,7 +120,11 @@ def collect(args: argparse.Namespace) -> None:
             rec["G"].append(np.asarray(g))
             rec["trial"].append(t)
         if t % 1000 == 0:
-            print(f"  trial {t:6d}  loss {float(loss):.4e}  ({time.time() - t0:.0f}s)", flush=True)
+            print(
+                f"  trial {t:6d}  loss {float(loss):.4e}  ({time.time() - t0:.0f}s)",
+                flush=True,
+            )
+
     ### Save recordings
     np.savez(DATA, **{k: np.array(v) for k, v in rec.items()}, stride=args.stride)
     print(f"  {len(rec['trial'])} recordings -> {DATA}")
@@ -136,7 +153,9 @@ def metrics(E: np.ndarray, P: np.ndarray) -> tuple[float, float]:
     ne = np.linalg.norm(E, axis=1)
     ok = ne > 0
     rel = np.linalg.norm(E - P, axis=1)[ok] / ne[ok]
-    cos = np.sum(E * P, 1)[ok] / (ne[ok] * np.maximum(np.linalg.norm(P, axis=1)[ok], 1e-30))
+    cos = np.sum(E * P, 1)[ok] / (
+        ne[ok] * np.maximum(np.linalg.norm(P, axis=1)[ok], 1e-30)
+    )
     return float(np.median(rel)), float(np.median(cos))
 
 
@@ -144,6 +163,7 @@ def fit(args: argparse.Namespace) -> None:
     """
     Fits target and off-target corrections and evaluates held-out recordings.
     """
+
     ### Unpack recordings and task configuration
     cfg, _, trial = setup()
     N, ntar = cfg["N"], cfg["Ntar"]
@@ -161,8 +181,12 @@ def fit(args: argparse.Namespace) -> None:
     CROSS = np.zeros((ntar, ntar, nmax, nmax))  # C^(m,i)_{k_m k_i}
     OFFT = np.zeros((N - ntar, ntar, nmax, Kh))  # C^(m,l)_{k_m k_l}
     out = {"metrics": {}}
-    print(f"  {S} recordings, every {int(d['stride'])} trials; held-out: alternate blocks of "
-          f"{args.block}\n  ridges r_A = {args.r_A}, r_C = {args.r_C}, r_C_off = {args.r_C_off}\n")
+    print(
+        f"  {S} recordings, every {int(d['stride'])} trials; "
+        "held-out: alternate blocks of "
+        f"{args.block}\n  ridges r_A = {args.r_A}, r_C = {args.r_C}, "
+        f"r_C_off = {args.r_C_off}\n"
+    )
     print(f"  {'row':<26} {'rel. error':>10} {'cosine':>8}   (held-out medians)")
 
     ### Target rows (Eq. FitAC)
@@ -173,17 +197,30 @@ def fit(args: argparse.Namespace) -> None:
         local = F.sum(1)
         XA = np.einsum("skp,jq->sjkpq", F, np.eye(P1)).reshape(S, P1, -1)
         others = [m for m in range(ntar) if m != i]
-        XC = np.concatenate([np.einsum("sa,scj->sjac", DL[:, m, :ns[m]], e).reshape(S, P1, -1)
-                             for m in others], axis=2)
+        XC = np.concatenate(
+            [
+                np.einsum("sa,scj->sjac", DL[:, m, : ns[m]], e).reshape(S, P1, -1)
+                for m in others
+            ],
+            axis=2,
+        )
         X = np.concatenate([XA, XC], axis=2)
         pa = XA.shape[2]
-        theta = wls(X[tr], (G[:, i] - local)[tr], q[tr], lambda dg: np.concatenate(
-            [np.full(pa, args.r_A * dg[:pa].mean()),
-             np.full(len(dg) - pa, args.r_C * max(dg[pa:].mean(), 1e-300))]))
+        theta = wls(
+            X[tr],
+            (G[:, i] - local)[tr],
+            q[tr],
+            lambda dg: np.concatenate(
+                [
+                    np.full(pa, args.r_A * dg[:pa].mean()),
+                    np.full(len(dg) - pa, args.r_C * max(dg[pa:].mean(), 1e-300)),
+                ]
+            ),
+        )
         MIX[i, :n] = np.eye(P1)[None] + theta[:pa].reshape(n, P1, P1)
         o = pa
         for m in others:
-            CROSS[m, i, :ns[m], :n] = theta[o:o + ns[m] * n].reshape(ns[m], n)
+            CROSS[m, i, : ns[m], :n] = theta[o : o + ns[m] * n].reshape(ns[m], n)
             o += ns[m] * n
         for name, P in [("local", local), ("A + C", local + X @ theta)]:
             rel, cos = metrics(G[te, i], P[te])
@@ -192,23 +229,37 @@ def fit(args: argparse.Namespace) -> None:
 
     ### Off-target rows (Eq. FitOff)
     Ph = np.zeros((S, N - ntar, P1))
-    for l in range(ntar, N):  # off-target rows, Eq. FitOff
-        e = EH[:, l - ntar][:, :, OFF[l]]  # (S, Kh, P1)
+    for i in range(ntar, N):  # off-target rows, Eq. FitOff
+        e = EH[:, i - ntar][:, :, OFF[i]]  # (S, Kh, P1)
         X = np.einsum("smc,sdj->sjmcd", DL, e).reshape(S, P1, -1)
-        theta = wls(X[tr], G[tr, l], q[tr],
-                    lambda dg: np.full(len(dg), args.r_C_off * max(dg.mean(), 1e-300)))
-        OFFT[l - ntar] = theta.reshape(ntar, nmax, Kh)
-        Ph[:, l - ntar] = X @ theta
-        rel, cos = metrics(G[te, l], Ph[te, l - ntar])
-        out["metrics"][f"off-target {l}"] = [rel, cos]
-        print(f"  off-target {l:<14} {rel:10.3f} {cos:8.3f}")
+        theta = wls(
+            X[tr],
+            G[tr, i],
+            q[tr],
+            lambda dg: np.full(len(dg), args.r_C_off * max(dg.mean(), 1e-300)),
+        )
+        OFFT[i - ntar] = theta.reshape(ntar, nmax, Kh)
+        Ph[:, i - ntar] = X @ theta
+        rel, cos = metrics(G[te, i], Ph[te, i - ntar])
+        out["metrics"][f"off-target {i}"] = [rel, cos]
+        print(f"  off-target {i:<14} {rel:10.3f} {cos:8.3f}")
     rel, cos = metrics(G[te, ntar:].reshape(te.sum(), -1), Ph[te].reshape(te.sum(), -1))
     out["metrics"]["off-target, all rows"] = [rel, cos]
     print(f"  {'off-target, all rows':<26} {rel:10.3f} {cos:8.3f}")
 
-    out.update({"spike_mix": MIX.tolist(), "cross": CROSS.tolist(), "offtarget": OFFT.tolist(),
-                "n_outputs": ns, "n_hidden_spikes": int(Kh),
-                "r_A": args.r_A, "r_C": args.r_C, "r_C_off": args.r_C_off})
+    out.update(
+        {
+            "spike_mix": MIX.tolist(),
+            "cross": CROSS.tolist(),
+            "offtarget": OFFT.tolist(),
+            "n_outputs": ns,
+            "n_hidden_spikes": int(Kh),
+            "r_A": args.r_A,
+            "r_C": args.r_C,
+            "r_C_off": args.r_C_off,
+        }
+    )
+
     ### Save fitted coefficients and validation metrics
     with open(args.out, "w") as file:
         json.dump(out, file, indent=1)
@@ -222,14 +273,23 @@ def fit(args: argparse.Namespace) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("stage", choices=["collect", "fit"])
     parser.add_argument("--trials", type=int, default=10_000)
-    parser.add_argument("--stride", type=int, default=10, help="collect: record every N trials")
-    parser.add_argument("--n-hidden", type=int, default=8,
-                    help="collect: spikes per off-target neuron with their own coefficients")
-    parser.add_argument("--block", type=int, default=50, help="fit: recordings per fit/held-out block")
+    parser.add_argument(
+        "--stride", type=int, default=10, help="collect: record every N trials"
+    )
+    parser.add_argument(
+        "--n-hidden",
+        type=int,
+        default=8,
+        help="collect: spikes per off-target neuron with their own coefficients",
+    )
+    parser.add_argument(
+        "--block", type=int, default=50, help="fit: recordings per fit/held-out block"
+    )
     parser.add_argument("--r-A", dest="r_A", type=float, default=1.0)
     parser.add_argument("--r-C", dest="r_C", type=float, default=1e-3)
     parser.add_argument("--r-C-off", dest="r_C_off", type=float, default=1.0)

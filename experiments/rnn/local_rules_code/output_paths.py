@@ -1,4 +1,4 @@
-"""Shared output locations, anchored to this folder rather than the working directory."""
+"""Shared output locations anchored to this folder."""
 
 import argparse
 from pathlib import Path
