@@ -3,6 +3,14 @@
 Figure generation, numerical checks, and full gradient validation share this directory and one output folder.
 All output paths are resolved relative to the source files, independently of the working directory.
 
+The Python scripts follow the sectioned style of `experiments/rnn/rnn.py` and
+`experiments/singleneuron/single.py`, with annotated interfaces and explicit
+initialization, event updates, analysis, and plotting blocks. Figure generation
+exposes `parse_args()` and `main()`. Full validation starts only when
+`fd_check_all.py` is executed or its `run()` function is called; importing it
+does not run checks or write results. `run(output_path=...)` can direct the
+validation report to a separate file and returns the check records.
+
 ```text
 qif_code/
   README.md             Combined documentation
