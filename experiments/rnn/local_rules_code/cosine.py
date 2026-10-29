@@ -13,11 +13,7 @@ If the rule gives row i no update at that point (|g_i.| = 0: local rule on
 off-target rows, or a neuron that did not spike), cos_i is undefined and
 stored as NaN.
 
-Usage (from experiments/rnn/local_rules_code/, after train.py):
-
-    python cosine.py    # -> output/data/cosine_results.npz, output/data/cosine_per_neuron.csv
 """
-
 import argparse
 import json
 import time
@@ -26,7 +22,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array
-
 from fastgrad import make_fast_grad
 from output_paths import DATA_DIR, ensure_output_dirs, output_file
 from spikegd.qif import QIFNeuron
@@ -51,6 +46,9 @@ def run(args: argparse.Namespace) -> dict:
     Compares each rule with the exact gradient, neuron by neuron, along its
     recorded trajectory.
     """
+    ### Output locations
+    args.out = output_file(args.out)
+    if args.csv: args.csv = output_file(args.csv)
 
     ### Unpack recordings and task configuration
     d = np.load(args.data)
@@ -84,9 +82,7 @@ def run(args: argparse.Namespace) -> dict:
     out = {"sigmas": sig, "trials": trials[::step], "n_targets": ntar}
     t0 = time.time()
     for r, rule_fn in rules.items():
-        if f"{r}_theta" not in d:
-            continue
-
+        if f"{r}_theta" not in d: continue
         def rows(theta: Array, rule_fn=rule_fn) -> Array:
             w = theta[:nw].reshape(N, N - 1)
             x0 = theta[nw:].reshape(2, N)
@@ -98,23 +94,22 @@ def run(args: argparse.Namespace) -> dict:
         th = d[f"{r}_theta"][:, :, ::step]  # (S, R, B', P)
         v = np.zeros(th.shape[:3] + (3, N))
         for s in range(len(sig)):
-            for q in (
-                range(1) if sig[s] == 0 else range(th.shape[1])
-            ):  # sigma = 0: one run
+            for q in (range(1) if sig[s] == 0 else range(th.shape[1])):
                 v[s, q] = np.asarray(fn(jnp.asarray(th[s, q])))
             if sig[s] == 0:
                 v[s, 1:] = v[s, 0]
 
-        # Cosine per row; undefined where the rule (or the exact gradient) is zero
+        # Cosine per row; undefined where the rule (or exact gradient) is zero
         norm_rule, norm_exact, dot = v[..., 0, :], v[..., 1, :], v[..., 2, :]
         with np.errstate(invalid="ignore", divide="ignore"):
             cos = np.where(
-                (norm_rule > 0) & (norm_exact > 0), dot / (norm_rule * norm_exact), np.nan
+                (norm_rule > 0) & (norm_exact > 0),
+                dot / (norm_rule * norm_exact),
+                np.nan,
             )
         out[f"{r}_cos"] = cos
         out[f"{r}_norm_rule"] = norm_rule
         out[f"{r}_norm_exact"] = norm_exact
-
         print(
             f"  {r}: done ({time.time() - t0:.0f}s); median cosine per neuron "
             "(over saved trials and seeds; '-' = never updated)",
@@ -147,7 +142,7 @@ def write_csv(path: str, out: dict, rules: list[str], ntar: int) -> None:
     Writes every per-neuron value: rule, sigma, seed, trial, neuron, cosine, norms.
     """
     sig = out["sigmas"]
-    with open(path, "w") as fh:
+    with open(output_file(path), "w") as fh:
         fh.write("rule,sigma,seed,trial,neuron,is_target,cosine,norm_rule,norm_exact\n")
         for r in rules:
             if f"{r}_cos" not in out:
@@ -157,7 +152,11 @@ def write_csv(path: str, out: dict, rules: list[str], ntar: int) -> None:
                 for q in range(1 if sig[s] == 0 else c.shape[1]):
                     for b, t in enumerate(out["trials"]):
                         for i in range(c.shape[-1]):
-                            cv = "" if np.isnan(c[s, q, b, i]) else f"{c[s, q, b, i]:.6g}"
+                            cv = (
+                                ""
+                                if np.isnan(c[s, q, b, i])
+                                else f"{c[s, q, b, i]:.6g}"
+                            )
                             fh.write(
                                 f"{r},{sig[s]:g},{q},{int(t)},{i},{int(i < ntar)},"
                                 f"{cv},{ng[s, q, b, i]:.6g},{nG[s, q, b, i]:.6g}\n"
@@ -168,8 +167,6 @@ def write_csv(path: str, out: dict, rules: list[str], ntar: int) -> None:
 ############################
 ### Command line
 ############################
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -187,7 +184,6 @@ def parse_args() -> argparse.Namespace:
     )
     args = parser.parse_args()
     return args
-
 
 def main() -> None:
     args = parse_args()

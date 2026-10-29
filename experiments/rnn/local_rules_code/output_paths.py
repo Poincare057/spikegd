@@ -21,9 +21,14 @@ def ensure_output_dirs() -> None:
 
 def output_file(path: str | Path) -> str:
     """
-    Create the parent directory for an output, including custom CLI paths.
+    Route bare filenames to data or figures and create the parent directory.
+
+    Paths that include a directory are kept as explicit output overrides.
     """
     path = Path(path)
+    if path.parent == Path("."):
+        directory = FIGS_DIR if path.suffix.lower() == ".svg" else DATA_DIR
+        path = directory / path
     path.parent.mkdir(parents=True, exist_ok=True)
     return str(path)
 

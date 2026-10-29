@@ -155,9 +155,14 @@ directory (explicit CLI path overrides are still supported):
 
 ```text
 output/
-  data/  # NPZ, JSON and pickle results
+  data/  # NPZ, JSON, pickle and CSV results
   figs/  # SVG figures only
 ```
+
+Bare output filenames (for example `--csv cosine_per_neuron.csv` or
+`--neurons-out fig_cosine_neurons.svg`) are routed to these folders too,
+including when writer functions are called directly. Paths with an explicit
+directory keep that location, and missing parent directories are created.
 
 The stages in `experiment.py` also use `output/data/` for snapshots,
 decomposition, partitions, convergence and retraining results, and save
@@ -265,4 +270,3 @@ CPU on mains power.
 - **The ridges matter.** Without them the fits are numerically singular. With a
   weak off-target ridge (r_C^off = 10⁻³) the hidden weights run away in
   training.
-- **Machine.** Keep it on mains power and awake during steps 1 and 3.

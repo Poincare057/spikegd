@@ -181,6 +181,9 @@ def run(args: argparse.Namespace) -> dict:
     Trains each rule under input jitter and saves parameters and loss metrics.
     """
 
+    ### Output location
+    args.out = output_file(args.out)
+
     ### Set up the simulation
     trial, loss_on, grads, optim = build(args)
     sig, R = args.sigmas, args.n_seeds

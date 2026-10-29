@@ -6,34 +6,26 @@ synapses feeding into K. Every three-factor rule (e-prop, RFLO) has to produce
 this row from a synapse-local eligibility trace scaled by a per-neuron learning
 signal, which means it can only represent influence that stays inside K. This
 script measures how much of the exact gradient that leaves out.
-
   g_exact     full recurrent gradient of row K
   g_local     the same gradient with the surround frozen, so every path that
               leaves K is severed: the direct-path contribution alone
-  g_nonlocal  g_exact - g_local, by definition (a residual, not an
-              independent measurement)
+  g_nonlocal  g_exact - g_local, by definition (a residual, not an independent measurement)
   rho         ||g_nonlocal|| / ||g_exact||, reported as a percentage
-
 Two graph conditions remove indirect paths, interpolated by eps in [0, 1]:
-
   sink      empties K's outgoing column, so nothing leaves K at all. Both
             indirect families (returning and non-returning) are gone.
   acyclic   partitions the other neurons into U and D; K receives only from U,
             sends only into D, and nothing in D reaches U or K. Cycles through
             K are gone but K still drives the network.
-
 At eps = 0 either condition makes g_local and g_exact the same object, so
 rho = 0 exactly. That is a test of the implementation, not a result; both bugs
 found while writing this showed up as a violation of it.
 
-Usage (each stage writes to disk, so stages can be run separately):
-
+Usage:
     python experiment.py train        --trials 400
     python experiment.py decompose    --eps 0 0.25 0.5 1.0
     python experiment.py partitions   --n-partitions 30
     python experiment.py figure
-
-Run from experiments/rnn/local_rules_code/ with spikegd installed.
 """
 
 import argparse
@@ -47,20 +39,17 @@ from pathlib import Path
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 os.environ.setdefault("JAX_ENABLE_X64", "True")
-
-# Resolve the shared experiment module when running these scripts directly.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-import jax  # noqa: E402
-import jax.numpy as jnp  # noqa: E402
-import numpy as np  # noqa: E402
-import optax  # noqa: E402
-from jax import grad, random  # noqa: E402
-from jaxtyping import Array  # noqa: E402
-
-from experiments.rnn.rnn import init_input, init_target, init_weights, outfn  # noqa: E402
-from output_paths import DATA_DIR, FIGS_DIR, ensure_output_dirs, output_file, svg_path  # noqa: E402
-from spikegd.qif import QIFNeuron  # noqa: E402
+import jax   
+import jax.numpy as jnp   
+import numpy as np   
+import optax   
+from jax import grad, random   
+from jaxtyping import Array
+from experiments.rnn.rnn import init_input, init_target, init_weights, outfn   
+from output_paths import DATA_DIR, FIGS_DIR, ensure_output_dirs, output_file, svg_path   
+from spikegd.qif import QIFNeuron   
 
 # %%
 ############################
@@ -114,8 +103,7 @@ def _mask_from_pairs(N: int, k: int, pairs: list[tuple[int, int]]) -> Array:
     """
     mask = np.ones((N, N - 1))
     for j, i in pairs:  # synapse j -> i
-        if i == j:
-            continue
+        if i == j: continue
         mask[i, j if j < i else j - 1] = 0.0
     return jnp.asarray(mask)
 
@@ -144,7 +132,6 @@ def acyclic_mask(N: int, k: int, D: Iterable[int]) -> Array:
 def apply_eps(w: Array, mask: Array, eps: float | Array) -> Array:
     """
     W_ij(eps): blocked synapses scaled by eps, all others untouched.
-
     eps is part of the parameterisation rather than an edit applied before
     differentiating, so the chain rule carries the factor through every blocked
     entry. This matters whenever the mask touches row K itself, as the acyclic
@@ -407,7 +394,7 @@ def stage_train(args: argparse.Namespace) -> None:
         trace.append((t + 1, float(loss), float(jnp.linalg.norm(g_k))))
 
     ### Save checkpoints
-    with open(SNAPS, "wb") as file:
+    with open(output_file(SNAPS), "wb") as file:
         pickle.dump({"snaps": snaps, "trace": trace, "args": vars(args)}, file)
     print(f"trained {args.trials} steps in {time.time() - t0:.1f}s")
     for step_index, _, _, loss in snaps:
@@ -446,7 +433,7 @@ def stage_decompose(args: argparse.Namespace) -> None:
             f"  eps {eps:<5} {time.time() - t0:5.1f}s   "
             + "  ".join(f"{r['step']}:{r['rho_pct']:.2f}%" for r in rows)
         )
-    with open(DECOMP, "w") as file:
+    with open(output_file(DECOMP), "w") as file:
         json.dump(out, file)
 
 
@@ -488,7 +475,7 @@ def stage_partitions(args: argparse.Namespace) -> None:
             f"  {label:<14} min {min(v):6.3f}%   median "
             f"{float(np.median(v)):6.3f}%   max {max(v):7.3f}%"
         )
-    with open(PARTS, "w") as file:
+    with open(output_file(PARTS), "w") as file:
         json.dump(out, file)
 
 
@@ -624,6 +611,7 @@ def stage_figure(args: argparse.Namespace) -> None:
     ax.grid(alpha=0.3, lw=0.5, axis="y")
 
     fig.tight_layout()
+    args.out = output_file(args.out)
     fig.savefig(args.out, format="svg", bbox_inches="tight")
     print(f"figure written to {args.out}")
 
@@ -715,7 +703,7 @@ def stage_converge(args: argparse.Namespace) -> None:
                 f"{m['norm_exact']:10.3e} {m['norm_nonlocal']:11.3e} "
                 f"{m['rho_pct']:7.3f}% {m['cos']:10.6f} {m['Kout']:5d}"
             )
-    with open(DATA_DIR / "converge.json", "w") as file:
+    with open(output_file(DATA_DIR / "converge.json"), "w") as file:
         json.dump(out, file)
 
 
@@ -861,7 +849,7 @@ def stage_retrain(args: argparse.Namespace) -> None:
         print(
             f"    U identical to intact: {same_U}     D identical to intact: {same_D}\n"
         )
-    with open(DATA_DIR / "retrain.json", "w") as file:
+    with open(output_file(DATA_DIR / "retrain.json"), "w") as file:
         json.dump(out, file)
 
 

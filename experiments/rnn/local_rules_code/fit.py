@@ -126,7 +126,11 @@ def collect(args: argparse.Namespace) -> None:
             )
 
     ### Save recordings
-    np.savez(DATA, **{k: np.array(v) for k, v in rec.items()}, stride=args.stride)
+    np.savez(
+        output_file(DATA),
+        **{k: np.array(v) for k, v in rec.items()},
+        stride=args.stride,
+    )
     print(f"  {len(rec['trial'])} recordings -> {DATA}")
 
 
@@ -261,6 +265,7 @@ def fit(args: argparse.Namespace) -> None:
     )
 
     ### Save fitted coefficients and validation metrics
+    args.out = output_file(args.out)
     with open(args.out, "w") as file:
         json.dump(out, file, indent=1)
     print(f"  -> {args.out}")

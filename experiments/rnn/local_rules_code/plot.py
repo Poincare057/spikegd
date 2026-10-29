@@ -14,7 +14,6 @@ Figures from train.py and cosine.py.
 Points where a rule leaves row i unchanged have no cosine and are left out.
 
 Usage (from experiments/rnn/local_rules_code/):
-
     python plot.py
 """
 
@@ -188,6 +187,7 @@ def fig_loss(args: argparse.Namespace) -> None:
     )
 
     ### Save figure
+    args.loss_out = output_file(args.loss_out)
     fig.savefig(args.loss_out, format="svg", bbox_inches="tight", facecolor=BG)
     print(f"  figure -> {args.loss_out}")
 
@@ -266,7 +266,8 @@ def fig_cosine(args: argparse.Namespace) -> None:
         axf.set_xlabel("neuron i")
         axf.grid(alpha=0.3, lw=0.5, axis="y")
         axf.set_title(
-            f"{'B' if c == 0 else ' '}   fraction of saved points with an update of row i",
+            f"{'B' if c == 0 else ' '}   "
+            "fraction of saved points with an update of row i",
             loc="left",
             fontsize=8.5,
         )
@@ -285,6 +286,7 @@ def fig_cosine(args: argparse.Namespace) -> None:
     )
 
     ### Save figure
+    args.cosine_out = output_file(args.cosine_out)
     fig.savefig(args.cosine_out, format="svg", bbox_inches="tight", facecolor=BG)
     print(f"  figure -> {args.cosine_out}")
 
@@ -348,6 +350,7 @@ def fig_neurons(args: argparse.Namespace) -> None:
     )
 
     ### Save figure
+    args.neurons_out = output_file(args.neurons_out)
     fig.savefig(args.neurons_out, format="svg", bbox_inches="tight", facecolor=BG)
     print(f"  figure -> {args.neurons_out}")
 
