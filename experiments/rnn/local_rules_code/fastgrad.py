@@ -30,16 +30,68 @@ through the end state with the same convention as each mode.
     loss, (gw, gx0) = g(w, x0, spikes_in)      # gw in spikegd's (N, N-1) layout
 """
 
+from collections.abc import Callable
+from functools import partial
+
+import experiment as ex  # Sets JAX CPU and float64 flags before importing JAX.
 import jax
 import jax.numpy as jnp
 from jax import lax
+from jaxtyping import Array
 
-import experiment as ex
+from spikegd.qif import QIFNeuron
 
 
-def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None,
-                   offtarget=None, n_hidden_spikes=None, return_pieces=False):
-    """spike_mix (trace mode only): optional array (ntar, nmax, N-1, N-1) holding
+# %%
+############################
+### Model derivatives
+############################
+
+
+def _grad_dt_spike(neuron: QIFNeuron, x: Array) -> Array:
+    """
+    Computes the next-spike-time derivative, or zero if the neuron never spikes.
+    """
+    dt = neuron.dt_spike(x)
+    grad = jax.grad(neuron.dt_spike)(x)
+    return jnp.where(jnp.isfinite(dt) & jnp.all(jnp.isfinite(grad)), grad, 0.0)
+
+
+def _make_flow_jvp(neuron: QIFNeuron) -> Callable:
+    """
+    Creates a flow derivative that propagates all eligibility directions.
+    """
+
+    def flow_jvp(x: Array, dt: Array, z: Array, ddt: Array) -> Array:
+        return jax.jvp(neuron.flow, (x, dt), (z, ddt))[1]
+
+    return jax.vmap(flow_jvp, in_axes=(None, None, 1, 0), out_axes=1)
+
+
+# %%
+############################
+### Local gradients
+############################
+
+
+def make_fast_grad(
+    neuron: QIFNeuron,
+    trial: dict,
+    ntar: int,
+    mode: str = "trace",
+    spike_mix: Array | None = None,
+    cross: Array | None = None,
+    offtarget: Array | None = None,
+    n_hidden_spikes: int | None = None,
+    return_pieces: bool = False,
+) -> Callable:
+    """
+    Creates a one-pass local or fitted loss-and-gradient function.
+
+    The returned function accepts weights, initial states and input spikes,
+    and returns the loss and gradients in the learnable parameter layout.
+
+    spike_mix (trace mode only): optional array (ntar, nmax, N-1, N-1) holding
     (I + A^(i,k)) for target i and output index k. Each output's eligibility over
     its neuron's input weights (spikegd layout, self entry dropped) is multiplied
     by its own matrix before it is accumulated; the initial-state directions are
@@ -64,12 +116,17 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
     per-output weight eligibilities ("EL", (ntar, nmax, N), network layout;
     ordinary spikes first, then pseudospikes), the per-spike weight
     eligibilities of the non-target neurons ("EH",
-    (N - ntar, Kh, N), network layout) and their spike counts ("HC")."""
+    (N - ntar, Kh, N), network layout) and their spike counts ("HC").
+    """
     assert mode in ("trace", "closed")
     assert (spike_mix is None and cross is None and offtarget is None
             and not return_pieces) or mode == "trace"
-    cfg = trial["cfg"]
-    N, T, K, eps = cfg["N"], cfg["T"], cfg["K"], neuron.eps
+
+    ### Unpack arguments
+    cfg: dict = trial["cfg"]
+    N: int = cfg["N"]
+    K: int = cfg["K"]
+    eps: float = neuron.eps
     denom = trial["denom"]
     weights_in = trial["weights_in"]
     tars = [jnp.asarray(t) for t in trial["t_targets"][:ntar]]
@@ -88,25 +145,20 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
         """Sum of loss terms of target k for output times ts (len n_k)."""
         tar = tars[k]
         cs = jnp.arange(ns[k])
-        ts = jnp.where(active, ts, tar)          # keep inactive terms finite
+        ts = jnp.where(active, ts, tar)  # keep inactive terms finite
         gate = jnp.where(cs == ns[k] - 1, ts < tar, True) & active
         return jnp.sum(jnp.where(gate, ((ts - tar) / (tar + 2)) ** 2, 0.0)) / denom
 
-    def grad_dt_spike(xk):
-        """d(time to next spike)/d(V, I) for one neuron; 0 if it never spikes."""
-        dt = neuron.dt_spike(xk)
-        g = jax.grad(neuron.dt_spike)(xk)
-        return jnp.where(jnp.isfinite(dt) & jnp.all(jnp.isfinite(g)), g, 0.0)
-
-    flow_jvp = jax.vmap(lambda xk, dt, z, ddt: jax.jvp(neuron.flow, (xk, dt), (z, ddt))[1],
-                        in_axes=(None, None, 1, 0), out_axes=1)
+    ### Model derivatives
+    grad_dt_spike = partial(_grad_dt_spike, neuron)
+    flow_jvp = _make_flow_jvp(neuron)
 
     MIX = None if spike_mix is None else jnp.asarray(spike_mix)
     CROSS = None if cross is None else jnp.asarray(cross)
     OFFT = None if offtarget is None else jnp.asarray(offtarget)
     hidden = OFFT is not None or return_pieces
     Kh = OFFT.shape[-1] if OFFT is not None else (n_hidden_spikes or 8)
-    NT = N if hidden else ntar          # neurons whose eligibilities are traced
+    NT = N if hidden else ntar  # neurons whose eligibilities are traced
     store = CROSS is not None or hidden  # keep per-output dL/dt of the targets
 
     def mixed(k, c, vec):
@@ -117,7 +169,8 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
         off = vec[:N][OFFDIAG[k]] @ MIX[k, c]
         return jnp.concatenate([jnp.zeros(N).at[OFFDIAG[k]].set(off), vec[N:]])
 
-    def fn(w, x0, spikes_in):
+    def gradfn(w: Array, x0: Array, spikes_in: tuple) -> tuple:
+        ### Initialize the simulation
         wn = ex.w_to_weights_net(w)
         order = jnp.argsort(spikes_in[0])
         spikes = (jnp.append(spikes_in[0][order], jnp.inf),
@@ -129,20 +182,21 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
               "tord": jnp.full((ntar, nmax), jnp.inf)}
         if mode == "trace":
             z0 = jnp.zeros((2, D)).at[0, N].set(1.0).at[1, N + 1].set(1.0)
-            tr["z"] = jnp.stack([z0] * NT)                        # (NT, 2, D)
-            tr["tau"] = jnp.zeros((NT, D))                        # d(event time)
-            tr["sig"] = jnp.stack([grad_dt_spike(x0[:, k]) @ z0   # d(next spike of k)
+            tr["z"] = jnp.stack([z0] * NT)  # (NT, 2, D)
+            tr["tau"] = jnp.zeros((NT, D))  # d(event time)
+            tr["sig"] = jnp.stack([grad_dt_spike(x0[:, k]) @ z0  # d(next spike of k)
                                    for k in range(NT)])
             if store:
-                tr["EL"] = jnp.zeros((ntar, nmax, D))    # eligibility of each output
-                tr["DL"] = jnp.zeros((ntar, nmax))       # dL/dt of each output
+                tr["EL"] = jnp.zeros((ntar, nmax, D))  # eligibility of each output
+                tr["DL"] = jnp.zeros((ntar, nmax))  # dL/dt of each output
             if hidden:
                 tr["EH"] = jnp.zeros((N - ntar, Kh, D))  # eligibility of each hidden spike
         else:
             tr["P"] = jnp.zeros(N)
             tr["s"] = jnp.stack([grad_dt_spike(x0[:, k])[1] for k in range(ntar)])
 
-        def step(carry, _):
+        ### Event and eligibility update
+        def step(carry: tuple, _) -> tuple:
             state, tr = carry
             t_old, x_old, dtn_old, _ = state
             state_new, (t_new, spike_in, j, x_new) = neuron.spike(
@@ -158,7 +212,7 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
                 zs, taus, sigs = [], [], []
                 for k in range(NT):
                     is_k = net_spike & (j_net == k)
-                    tau_new = jnp.where(is_k, tr["sig"][k], 0.0)   # surround: fixed
+                    tau_new = jnp.where(is_k, tr["sig"][k], 0.0)  # surround: fixed
                     ddt = tau_new - tr["tau"][k]
                     xk = x_old[:, k].at[0].set(jnp.where(mask[k], 0.0, x_old[0, k]))
                     zk = tr["z"][k]
@@ -167,7 +221,7 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
                     zn = zn.at[0].set(jnp.where(mask[k], 0.0, zn[0]))
                     send = net_spike & (j_net != k)
                     zn = zn.at[1].add(jnp.where(send, jax.nn.one_hot(j_net, D), 0.0))
-                    zn = zn.at[0].set(jnp.where(is_k, 0.0, zn[0]))   # reset
+                    zn = zn.at[0].set(jnp.where(is_k, 0.0, zn[0]))  # reset
                     recomputed = (~mask[k]) | ((j_net == k) & ~spike_in)
                     sig = jnp.where(recomputed,
                                     tau_new + grad_dt_spike(x_new[:, k]) @ zn,
@@ -187,7 +241,9 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
                         ci = jnp.minimum(c, Kh - 1)
                         tr["EH"] = tr["EH"].at[k - ntar, ci].set(
                             jnp.where(ok, tau_new, tr["EH"][k - ntar, ci]))
-                    zs.append(zn); taus.append(tau_new); sigs.append(sig)
+                    zs.append(zn)
+                    taus.append(tau_new)
+                    sigs.append(sig)
                 tr["z"], tr["tau"], tr["sig"] = jnp.stack(zs), jnp.stack(taus), jnp.stack(sigs)
             else:
                 P_prev = tr["P"]
@@ -215,10 +271,12 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
             tr["cnt"], tr["g"], tr["tord"] = cnt, g, tord
             return (state_new, tr), None
 
+        ### Simulation
         (state_end, tr), _ = lax.scan(step, (state, tr), None, length=K)
         x_end = state_end[1]
         rates = neuron.construct_ratefn(x_end)(input=-x_end[1])
 
+        ### Ordinary spikes and pseudospikes
         loss = 0.0
         g = tr["g"]
         for k in range(ntar):
@@ -239,6 +297,7 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
                     tp = neuron.t_pseudo(xk, neuron.linear(rates, wrow), cs + 1 - Kout, cfg)
                     return jnp.stack([loss_terms(k, tp, (cs >= Kout) & (cs == c))
                                       for c in range(n)])
+
                 jx, jw = jax.jacrev(fterms, argnums=(0, 1))(x_end[:, k], wn[k])
                 for c in range(n):
                     vec = jx[c] @ tr["z"][k] + jnp.concatenate([jw[c], jnp.zeros(2)])
@@ -252,6 +311,7 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
                 # store eligibility and dL/dt of this neuron's pseudospike outputs
                 def ftimes(xk, wrow, n=n, Kout=Kout, cs=cs):
                     return neuron.t_pseudo(xk, neuron.linear(rates, wrow), cs + 1 - Kout, cfg)
+
                 tp = ftimes(x_end[:, k], wn[k])
                 jtx, jtw = jax.jacrev(ftimes, argnums=(0, 1))(x_end[:, k], wn[k])
                 for c in range(n):
@@ -261,19 +321,22 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
                     tr["EL"] = tr["EL"].at[k, c].set(jnp.where(pseudo, el, tr["EL"][k, c]))
                     tr["DL"] = tr["DL"].at[k, c].set(jnp.where(pseudo, dl, tr["DL"][k, c]))
 
+        ### Fitted non-local corrections
         if CROSS is not None:
             # explicit cross-target term: sum_c S_ic e_i.(t_c), with
             # S_ic = sum_{m != i} sum_c' dL/dt_{c'_m} C[m, i, c', c]
             for i in range(ntar):
-                S = sum(tr["DL"][m] @ CROSS[m, i] for m in range(ntar) if m != i)   # (nmax,)
+                S = sum(tr["DL"][m] @ CROSS[m, i] for m in range(ntar) if m != i)  # (nmax,)
                 g = g.at[i, :N].add(S[:ns[i]] @ tr["EL"][i, :ns[i], :N])
 
         gw_net = jnp.zeros((N, N)).at[:ntar].set(g[:, :N])
         if OFFT is not None:
             # non-target rows: sum_c S_lc e_l.(t_{c_l}), with
             # S_lc = sum_m sum_c' dL/dt_{c'_m} C[l - ntar, m, c', c]
-            S = jnp.einsum("mc,lmcd->ld", tr["DL"], OFFT)             # (N - ntar, Kh)
+            S = jnp.einsum("mc,lmcd->ld", tr["DL"], OFFT)  # (N - ntar, Kh)
             gw_net = gw_net.at[ntar:].set(jnp.einsum("ld,ldj->lj", S, tr["EH"][:, :, :N]))
+
+        ### Convert gradients to the learnable parameter layout
         gw = jnp.take_along_axis(gw_net, OFFDIAG, axis=1)
         gx0 = jnp.zeros((2, N)).at[:, :ntar].set(g[:, N:].T)
         if return_pieces:
@@ -281,11 +344,18 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
                                      "EH": tr["EH"][:, :, :N], "HC": tr["cnt"][ntar:]}
         return loss, (gw, gx0)
 
-    return fn
+    return gradfn
 
 
-def make_eligibility(neuron, trial):
-    """Summed spike-time eligibility of every neuron, in one forward pass.
+# %%
+############################
+### Spike-time eligibility
+############################
+
+
+def make_eligibility(neuron: QIFNeuron, trial: dict) -> Callable:
+    """
+    Summed spike-time eligibility of every neuron, in one forward pass.
 
     Returns ebar(w, x0, spikes_in) of shape (N, N-1) (spikegd's layout) with
         ebar_ij = sum over ordinary spikes k of neuron i of dt_{k_i}/dw_ij,
@@ -293,22 +363,21 @@ def make_eligibility(neuron, trial):
     every other neuron's spike times are held fixed, neuron i's own dynamics
     (including its earlier spikes and resets) are propagated.
     """
-    cfg = trial["cfg"]
-    N, K, eps = cfg["N"], cfg["K"], neuron.eps
+    ### Unpack arguments
+    cfg: dict = trial["cfg"]
+    N: int = cfg["N"]
+    K: int = cfg["K"]
+    eps: float = neuron.eps
     weights_in = trial["weights_in"]
     OFFDIAG = jnp.array([[j for j in range(N) if j != i] for i in range(N)])
 
-    def grad_dt_spike(xk):
-        dt = neuron.dt_spike(xk)
-        g = jax.grad(neuron.dt_spike)(xk)
-        return jnp.where(jnp.isfinite(dt) & jnp.all(jnp.isfinite(g)), g, 0.0)
-
-    flow_jvp = jax.vmap(lambda xk, dt, z, ddt: jax.jvp(neuron.flow, (xk, dt), (z, ddt))[1],
-                        in_axes=(None, None, 1, 0), out_axes=1)
+    ### Model derivatives
+    grad_dt_spike = partial(_grad_dt_spike, neuron)
+    flow_jvp = _make_flow_jvp(neuron)
 
     def per_neuron(k, xo, xn, mask_k, z, tau, sig, eb, dt, j_net, net_spike, spike_in):
         is_k = net_spike & (j_net == k)
-        tau_new = jnp.where(is_k, sig, 0.0)        # surround spike times are fixed
+        tau_new = jnp.where(is_k, sig, 0.0)  # surround spike times are fixed
         ddt = tau_new - tau
         xk = xo.at[0].set(jnp.where(mask_k, 0.0, xo[0]))
         z = z.at[0].set(jnp.where(mask_k, 0.0, z[0]))
@@ -325,7 +394,8 @@ def make_eligibility(neuron, trial):
     step_all = jax.vmap(per_neuron, in_axes=(0, 1, 1, 0, 0, 0, 0, 0,
                                              None, None, None, None))
 
-    def fn(w, x0, spikes_in):
+    def eligibilityfn(w: Array, x0: Array, spikes_in: tuple) -> Array:
+        ### Initialize the simulation
         wn = ex.w_to_weights_net(w)
         order = jnp.argsort(spikes_in[0])
         spikes = (jnp.append(spikes_in[0][order], jnp.inf),
@@ -347,7 +417,8 @@ def make_eligibility(neuron, trial):
                           dt, j_net, net_spike, spike_in)
             return (state_new, tr), None
 
+        ### Simulation
         (_, (_, _, _, eb)), _ = lax.scan(step, (state, tr), None, length=K)
         return jnp.take_along_axis(eb, OFFDIAG, axis=1)
 
-    return fn
+    return eligibilityfn

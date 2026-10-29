@@ -141,6 +141,15 @@ event-based simulation. `experiment.py` imports the shared
 Run the commands below from `experiments/rnn/local_rules_code/` with `spikegd`
 installed.
 
+The scripts follow the `rnn.py` and `single.py` organization: `# %%` sections
+separate configuration, initialization, model functions, training and plotting.
+Public functions have type annotations, and numerical routines keep their
+setup, updates and result handling in explicit blocks. CLI scripts expose
+`parse_args()` and `main()`; `train.run(args)` and `cosine.run(args)` can also
+be called directly with an `argparse.Namespace` to run and save an experiment.
+`fastgrad.py` shares the spike-time and flow derivative helpers between its
+gradient and summed-eligibility implementations.
+
 Outputs are created automatically under this folder, regardless of the working
 directory (explicit CLI path overrides are still supported):
 

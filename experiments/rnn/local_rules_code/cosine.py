@@ -24,25 +24,41 @@ import experiment as ex  # sets JAX_PLATFORMS / JAX_ENABLE_X64 on import
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jaxtyping import Array
 from spikegd.qif import QIFNeuron
 
 from fastgrad import make_fast_grad
 from output_paths import DATA_DIR, ensure_output_dirs, output_file
 
+# %%
+############################
+### Configuration
+############################
+
+
 PARTS = ["target rows", "all rows", "off-target rows"]
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", default=str(DATA_DIR / "train_results.npz"))
-    ap.add_argument("--fit", default=str(DATA_DIR / "fit_rule.json"))
-    ap.add_argument("--every", type=int, default=250, help="trials between evaluations")
-    ap.add_argument("--out", default=str(DATA_DIR / "cosine_results.npz"))
-    args = ap.parse_args()
-    ensure_output_dirs()
-    args.out = output_file(args.out)
+# %%
+############################
+### Gradient comparison
+############################
 
+
+def cosine_similarity(a: Array, b: Array) -> Array:
+    """
+    Computes cosine similarity, returning zero for a zero update vector.
+    """
+    return jnp.vdot(a, b) / jnp.maximum(
+        jnp.linalg.norm(a) * jnp.linalg.norm(b), 1e-300
+    )
+
+
+def run(args: argparse.Namespace) -> dict:
+    """
+    Compares each rule with the exact gradient along its recorded trajectory.
+    """
+    ### Unpack recordings and task configuration
     d = np.load(args.data)
     sig, trials = d["sigmas"], d["trials"]
     cfg = dict(ex.BASE_CONFIG)
@@ -51,7 +67,9 @@ def main():
     trial = ex.make_trial(cfg, ntar, 0.0)
     one = jnp.array(1.0)
     full = ex.make_full_loss(neuron, trial, jnp.ones_like(trial["w0"]))
-    f = json.load(open(args.fit))
+    ### Gradient rules
+    with open(args.fit) as file:
+        f = json.load(file)
     rules = {"local": make_fast_grad(neuron, trial, ntar, "trace"),
              "fitted": make_fast_grad(neuron, trial, ntar, "trace",
                                       spike_mix=np.array(f["spike_mix"]),
@@ -60,23 +78,26 @@ def main():
     nw = N * (N - 1)
     step = max(args.every // int(trials[1] - trials[0]), 1)
 
-    def cos(a, b):
-        return jnp.vdot(a, b) / jnp.maximum(jnp.linalg.norm(a) * jnp.linalg.norm(b), 1e-300)
-
+    ### Evaluate recorded parameters
     out = {"sigmas": sig, "trials": trials[::step], "parts": np.array(PARTS)}
     t0 = time.time()
     for r, rule_fn in rules.items():
         if f"{r}_theta" not in d:
             continue
 
-        def cosines(theta, rule_fn=rule_fn):
-            w = theta[:nw].reshape(N, N - 1); x0 = theta[nw:].reshape(2, N)
-            gE = jax.grad(lambda ww: full(ww, x0, one))(w)
-            gR = rule_fn(w, x0, trial["spikes_in"])[1][0]
-            return jnp.stack([cos(gR[:ntar], gE[:ntar]), cos(gR, gE),
-                              cos(gR[ntar:], gE[ntar:])])
+        def cosines(theta: Array, rule_fn=rule_fn) -> Array:
+            w = theta[:nw].reshape(N, N - 1)
+            x0 = theta[nw:].reshape(2, N)
+            grad_exact = jax.grad(lambda ww: full(ww, x0, one))(w)
+            grad_rule = rule_fn(w, x0, trial["spikes_in"])[1][0]
+            return jnp.stack([
+                cosine_similarity(grad_rule[:ntar], grad_exact[:ntar]),
+                cosine_similarity(grad_rule, grad_exact),
+                cosine_similarity(grad_rule[ntar:], grad_exact[ntar:]),
+            ])
+
         fn = jax.jit(jax.vmap(cosines))
-        th = d[f"{r}_theta"][:, :, ::step]                     # (S, R, B', P)
+        th = d[f"{r}_theta"][:, :, ::step]  # (S, R, B', P)
         res = np.zeros(th.shape[:3] + (3,))
         for s in range(len(sig)):
             for q in (range(1) if sig[s] == 0 else range(th.shape[1])):  # sigma = 0: one run
@@ -89,8 +110,35 @@ def main():
             m = np.median(res[s_i].reshape(-1, 3), 0)
             print("    sigma {:<5g} median cosine similarity: ".format(s)
                   + ", ".join(f"{p} {v:.3f}" for p, v in zip(PARTS, m)), flush=True)
+    ### Save comparisons
     np.savez(args.out, **out)
     print(f"  -> {args.out}")
+
+    return out
+
+
+# %%
+############################
+### Command line
+############################
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--data", default=str(DATA_DIR / "train_results.npz"))
+    parser.add_argument("--fit", default=str(DATA_DIR / "fit_rule.json"))
+    parser.add_argument("--every", type=int, default=250, help="trials between evaluations")
+    parser.add_argument("--out", default=str(DATA_DIR / "cosine_results.npz"))
+    args = parser.parse_args()
+    return args
+
+
+def main() -> None:
+    args = parse_args()
+    ensure_output_dirs()
+    args.out = output_file(args.out)
+    run(args)
 
 
 if __name__ == "__main__":

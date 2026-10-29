@@ -42,6 +42,7 @@ import os
 import pickle
 import sys
 import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -55,16 +56,33 @@ import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 import optax  # noqa: E402
 from jax import grad, random  # noqa: E402
+from jaxtyping import Array  # noqa: E402
 
 from experiments.rnn.rnn import init_input, init_target, init_weights, outfn  # noqa: E402
 from spikegd.qif import QIFNeuron  # noqa: E402
 from output_paths import DATA_DIR, FIGS_DIR, ensure_output_dirs, output_file, svg_path  # noqa: E402
 
+# %%
+############################
+### Configuration
+############################
+
+
 # Published config from rnn.ipynb.
 BASE_CONFIG = {
-    "seed": 7, "tau": 1.0, "eps": 1e-6, "alpha": 10.0, "N": 10,
-    "w_in_exc": 5.0, "w_in_inh": -5.0, "r_in": 1.0, "T": 10.0,
-    "K": 500, "dt": 0.01, "Ntar": 2, "r_targets": [1.0, 0.5],
+    "seed": 7,
+    "tau": 1.0,
+    "eps": 1e-6,
+    "alpha": 10.0,
+    "N": 10,
+    "w_in_exc": 5.0,
+    "w_in_inh": -5.0,
+    "r_in": 1.0,
+    "T": 10.0,
+    "K": 500,
+    "dt": 0.01,
+    "Ntar": 2,
+    "r_targets": [1.0, 0.5],
 }
 
 SNAPS = DATA_DIR / "snaps.pkl"
@@ -72,18 +90,16 @@ DECOMP = DATA_DIR / "decomposition.json"
 PARTS = DATA_DIR / "partitions.json"
 
 
-# ===========================================================================
-# Weight bookkeeping
-#
-# spikegd stores learnable recurrent weights as `w` of shape (N, N-1): row i is
-# neuron i's incoming weights with its always-zero self-entry removed. After
-# reinsertion, weights_net[i, j] is the synapse j -> i, so column j holds
-# neuron j's outgoing weights and row i its incoming ones.
-# ===========================================================================
+# %%
+############################
+### Model
+############################
 
 
-def w_to_weights_net(w):
-    """Vectorised rnn.w_to_weights_net, traceable under jit."""
+def w_to_weights_net(w: Array) -> Array:
+    """
+    Vectorised rnn.w_to_weights_net, traceable under jit.
+    """
     N = w.shape[0]
     wn = jnp.zeros((N, N))
     r, c = jnp.tril_indices(N, -1)
@@ -92,23 +108,28 @@ def w_to_weights_net(w):
     return wn.at[r, c].set(w[r, c - 1])
 
 
-def _mask_from_pairs(N, k, pairs):
-    """Build a (N, N-1) mask that is 0 on the given (post, pre) synapses."""
+def _mask_from_pairs(N: int, k: int, pairs: list[tuple[int, int]]) -> Array:
+    """
+    Build a (N, N-1) mask that is 0 on the given (post, pre) synapses.
+    """
     mask = np.ones((N, N - 1))
-    for j, i in pairs:            # synapse j -> i
+    for j, i in pairs:  # synapse j -> i
         if i == j:
             continue
         mask[i, j if j < i else j - 1] = 0.0
     return jnp.asarray(mask)
 
 
-def sink_mask(N, k):
-    """Block every synapse leaving K: K receives from all, sends to none."""
+def sink_mask(N: int, k: int) -> Array:
+    """
+    Block every synapse leaving K: K receives from all, sends to none.
+    """
     return _mask_from_pairs(N, k, [(k, i) for i in range(N) if i != k])
 
 
-def acyclic_mask(N, k, D):
-    """Block the synapses that would close a cycle through K.
+def acyclic_mask(N: int, k: int, D: Iterable[int]) -> Array:
+    """
+    Block the synapses that would close a cycle through K.
 
     D is the downstream set; U is everything else except K. Blocked blocks are
     D -> U, D -> K and K -> U. The last is easy to miss and is not optional:
@@ -120,8 +141,9 @@ def acyclic_mask(N, k, D):
     return _mask_from_pairs(N, k, pairs)
 
 
-def apply_eps(w, mask, eps):
-    """W_ij(eps): blocked synapses scaled by eps, all others untouched.
+def apply_eps(w: Array, mask: Array, eps: float | Array) -> Array:
+    """
+    W_ij(eps): blocked synapses scaled by eps, all others untouched.
 
     eps is part of the parameterisation rather than an edit applied before
     differentiating, so the chain rule carries the factor through every blocked
@@ -131,30 +153,43 @@ def apply_eps(w, mask, eps):
     return jnp.where(mask == 0.0, eps * w, w)
 
 
-# ===========================================================================
-# Trial setup and losses
-# ===========================================================================
+# %%
+############################
+### Initialization
+############################
 
 
-def make_trial(cfg, ntar, w_scale):
-    """Input spikes, targets, input weights and init, exactly as rnn.py."""
+def make_trial(cfg: dict, ntar: int, w_scale: float) -> dict:
+    """
+    Input spikes, targets, input weights and init, exactly as rnn.py.
+    """
+    ### Unpack arguments
     c = dict(cfg)
     c["Ntar"] = ntar
     c["r_targets"] = cfg["r_targets"][:ntar]
+    ### Input and target spikes
     key = random.PRNGKey(c["seed"])
     key, spikes_in = init_input(key, c)
     weights_in = init_weights(c)
     key, t_targets = init_target(key, c)
-    key, sub = random.split(key)
-    w0 = w_scale * random.normal(sub, (c["N"], c["N"] - 1))
+    ### Initial parameters
+    key, subkey = random.split(key)
+    w0 = w_scale * random.normal(subkey, (c["N"], c["N"] - 1))
     x0 = jnp.zeros((2, c["N"]))
     denom = float(sum(len(t) for t in t_targets))
     return dict(cfg=c, spikes_in=spikes_in, weights_in=weights_in,
                 t_targets=t_targets, w0=w0, x0=x0, denom=denom)
 
 
-def lossfn_shared(t_outs, t_targets, denom):
-    """rnn.lossfn with the normaliser passed in.
+# %%
+############################
+### Loss functions
+############################
+
+
+def lossfn_shared(t_outs: list[Array], t_targets: list[Array], denom: float) -> Array:
+    """
+    rnn.lossfn with the normaliser passed in.
 
     rnn.lossfn divides by the total number of targets, which would rescale the
     gradient purely as a side effect of Ntar and contaminate any comparison
@@ -167,13 +202,15 @@ def lossfn_shared(t_outs, t_targets, denom):
             ((t_out[:-1] - t_target[:-1]) / (t_target[:-1] + 2)) ** 2
         )
         total = total + ((t_out[-1] - t_target[-1]) / (t_target[-1] + 2)) ** 2 * (
-            t_out[-1] < t_target[-1]
+                t_out[-1] < t_target[-1]
         )
     return total / denom
 
 
-def make_full_loss(neuron, trial, mask):
-    """L(w, x0, eps) over the whole network."""
+def make_full_loss(neuron: QIFNeuron, trial: dict, mask: Array) -> Callable:
+    """
+    L(w, x0, eps) over the whole network.
+    """
     cfg, denom = trial["cfg"], trial["denom"]
 
     def loss_fn(w, x0, eps):
@@ -186,8 +223,17 @@ def make_full_loss(neuron, trial, mask):
     return loss_fn
 
 
-def record_surround(neuron, trial, w, x0, mask, eps, k):
-    """Run the network once and freeze everything the surround produces.
+def record_surround(
+    neuron: QIFNeuron,
+    trial: dict,
+    w: Array,
+    x0: Array,
+    mask: Array,
+    eps: float | Array,
+    k: int,
+) -> tuple:
+    """
+    Run the network once and freeze everything the surround produces.
 
     The recorded event queue is a constant, so when K is resimulated against it
     no gradient can flow out of K and back. That is what makes the resulting
@@ -217,8 +263,18 @@ def record_surround(neuron, trial, w, x0, mask, eps, k):
     return (frozen_times, idx.astype(int)), pseudo_rates, out
 
 
-def make_frozen_loss(neuron, trial, queue, pseudo_rates, k, mask, eps):
-    """L as a function of K's incoming weights, surround held fixed."""
+def make_frozen_loss(
+    neuron: QIFNeuron,
+    trial: dict,
+    queue: tuple,
+    pseudo_rates: Array,
+    k: int,
+    mask: Array,
+    eps: float | Array,
+) -> Callable:
+    """
+    L as a function of K's incoming weights, surround held fixed.
+    """
     cfg, denom = trial["cfg"], trial["denom"]
     single_cfg = dict(cfg)
     single_cfg["Ntar"] = 1
@@ -248,13 +304,24 @@ def make_frozen_loss(neuron, trial, queue, pseudo_rates, k, mask, eps):
     return loss_fn
 
 
-# ===========================================================================
-# The measurement
-# ===========================================================================
+# %%
+############################
+### Gradient decomposition
+############################
 
 
-def decompose(neuron, trial, w, x0, eps, k, mask):
-    """Split dL/dW[k, :] into local and non-local parts at these weights."""
+def decompose(
+    neuron: QIFNeuron,
+    trial: dict,
+    w: Array,
+    x0: Array,
+    eps: float,
+    k: int,
+    mask: Array,
+) -> dict:
+    """
+    Split dL/dW[k, :] into local and non-local parts at these weights.
+    """
     full = make_full_loss(neuron, trial, mask)
     g_exact = grad(full, argnums=0)(w, x0, jnp.array(eps))[k]
     loss_val = float(full(w, x0, jnp.array(eps)))
@@ -280,13 +347,15 @@ def decompose(neuron, trial, w, x0, eps, k, mask):
     }
 
 
-# ===========================================================================
-# Stages
-# ===========================================================================
+# %%
+############################
+### Training and measurements
+############################
 
 
-def stage_train(args):
-    """Train the intact network and checkpoint along the way.
+def stage_train(args: argparse.Namespace) -> None:
+    """
+    Train the intact network and checkpoint along the way.
 
     Row K of the training gradient is exactly g_exact at eps = 1, so it is
     cached here rather than recomputed later.
@@ -311,10 +380,12 @@ def stage_train(args):
         updates, opt_state = optim.update(grads, opt_state)
         return optax.apply_updates(p, updates), opt_state, loss, grads[0][args.k]
 
-    p, opt_state = (trial["w0"], trial["x0"]), None
+    ### Initialize
+    p = (trial["w0"], trial["x0"])
     opt_state = optim.init(p)
     checkpoints = set(args.checkpoints)
     snaps, trace = [], []
+    ### Training
     t0 = time.time()
     for t in range(args.trials + 1):
         if t in checkpoints:
@@ -324,24 +395,31 @@ def stage_train(args):
         p, opt_state, loss, g_k = step(p, opt_state)
         trace.append((t + 1, float(loss), float(jnp.linalg.norm(g_k))))
 
-    pickle.dump({"snaps": snaps, "trace": trace, "args": vars(args)},
-                open(SNAPS, "wb"))
+    ### Save checkpoints
+    with open(SNAPS, "wb") as file:
+        pickle.dump({"snaps": snaps, "trace": trace, "args": vars(args)}, file)
     print(f"trained {args.trials} steps in {time.time() - t0:.1f}s")
     for s, _, _, l in snaps:
         print(f"  step {s:5d}   loss {l:.5e}")
 
 
-def stage_decompose(args):
-    """Sweep eps at each checkpoint. Run in chunks; results accumulate."""
+def stage_decompose(args: argparse.Namespace) -> None:
+    """
+    Sweep eps at each checkpoint. Run in chunks; results accumulate.
+    """
     cfg = dict(BASE_CONFIG)
     cfg["seed"] = args.seed
     neuron = QIFNeuron(cfg["tau"], cfg["eps"], cfg["alpha"])
     trial = make_trial(cfg, args.ntar, args.w_scale)
-    snaps = pickle.load(open(SNAPS, "rb"))["snaps"]
+    with open(SNAPS, "rb") as file:
+        snaps = pickle.load(file)["snaps"]
     mask = (sink_mask(cfg["N"], args.k) if args.arch == "sink"
             else acyclic_mask(cfg["N"], args.k, range(args.k + 1, args.k + 1 + args.n_down)))
 
-    out = json.load(open(DECOMP)) if os.path.exists(DECOMP) else {}
+    out = {}
+    if DECOMP.exists():
+        with open(DECOMP) as file:
+            out = json.load(file)
     for eps in args.eps:
         t0 = time.time()
         rows = []
@@ -352,22 +430,29 @@ def stage_decompose(args):
         out[f"{args.arch}:{eps}"] = rows
         print(f"  eps {eps:<5} {time.time() - t0:5.1f}s   "
               + "  ".join(f"{r['step']}:{r['rho_pct']:.2f}%" for r in rows))
-    json.dump(out, open(DECOMP, "w"))
+    with open(DECOMP, "w") as file:
+        json.dump(out, file)
 
 
-def stage_partitions(args):
-    """Vary which neurons sit downstream of K, holding |D| and weights fixed."""
+def stage_partitions(args: argparse.Namespace) -> None:
+    """
+    Vary which neurons sit downstream of K, holding |D| and weights fixed.
+    """
     cfg = dict(BASE_CONFIG)
     cfg["seed"] = args.seed
     N, k = cfg["N"], args.k
     neuron = QIFNeuron(cfg["tau"], cfg["eps"], cfg["alpha"])
-    trial = make_trial(cfg, 2, args.w_scale)   # Ntar=2 so a loss neuron can be in D
-    snaps = {s: (w, x) for s, w, x, _ in pickle.load(open(SNAPS, "rb"))["snaps"]}
+    trial = make_trial(cfg, 2, args.w_scale)  # Ntar=2 so a loss neuron can be in D
+    with open(SNAPS, "rb") as file:
+        snaps = {s: (w, x) for s, w, x, _ in pickle.load(file)["snaps"]}
     last = max(snaps)
 
     rng = np.random.default_rng(args.part_seed)
     pool = [i for i in range(N) if i != k and i != 1]
-    out = json.load(open(PARTS)) if os.path.exists(PARTS) else []
+    out = []
+    if PARTS.exists():
+        with open(PARTS) as file:
+            out = json.load(file)
     for label, (w, x0) in [("init", snaps[0]), (f"trained({last})", snaps[last])]:
         for _ in range(args.n_partitions):
             # neuron 1 is the extra loss neuron and is always downstream, so a
@@ -381,16 +466,26 @@ def stage_partitions(args):
         v = [r["rho_pct"] for r in out if r["weights"] == label]
         print(f"  {label:<14} min {min(v):6.3f}%   median "
               f"{float(np.median(v)):6.3f}%   max {max(v):7.3f}%")
-    json.dump(out, open(PARTS, "w"))
+    with open(PARTS, "w") as file:
+        json.dump(out, file)
 
 
-def stage_figure(args):
+# %%
+############################
+### Plotting
+############################
+
+
+def stage_figure(args: argparse.Namespace) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    dec = json.load(open(DECOMP))
-    part = json.load(open(PARTS))
+    ### Load measurements
+    with open(DECOMP) as file:
+        dec = json.load(file)
+    with open(PARTS) as file:
+        part = json.load(file)
 
     def curves(arch):
         """{eps: rows} for one architecture, sorted by eps."""
@@ -417,8 +512,10 @@ def stage_figure(args):
     ax.set_xlabel(r"$\epsilon$   (0 = reduced, 1 = intact)")
     ax.set_ylabel(r"non-local share  $\rho$  (%)")
     ax.set_title("A   at initialisation", loc="left", fontsize=10)
-    ax.set_xlim(-0.05, 1.05); ax.set_ylim(bottom=0)
-    ax.legend(fontsize=7.5, frameon=False); ax.grid(alpha=0.3, lw=0.5)
+    ax.set_xlim(-0.05, 1.05)
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=7.5, frameon=False)
+    ax.grid(alpha=0.3, lw=0.5)
 
     # --- B: along training -------------------------------------------------
     ax = axes[1]
@@ -437,9 +534,11 @@ def stage_figure(args):
     ax.axhline(100, color="#666", ls=":", lw=1)
     ax.text(0.03, 0.93, "local gradient fully wrong", transform=ax.transAxes,
             fontsize=7.5, color="#666")
-    ax.set_yscale("log"); ax.set_yticks([1, 10, 100])
+    ax.set_yscale("log")
+    ax.set_yticks([1, 10, 100])
     ax.set_yticklabels(["1%", "10%", "100%"])
-    ax.set_xlabel("training step"); ax.set_ylabel(r"$\rho$  (%)")
+    ax.set_xlabel("training step")
+    ax.set_ylabel(r"$\rho$  (%)")
     ax.set_title("B   along training", loc="left", fontsize=10)
     ax.legend(fontsize=6.5, frameon=False, loc="lower right", ncol=1)
     ax.grid(alpha=0.3, lw=0.5)
@@ -455,8 +554,10 @@ def stage_figure(args):
         ax.plot([j - 0.22, j + 0.22], [np.median(v)] * 2, color=col, lw=2.2)
         ax.text(j + 0.28, v.max(), f"{v.max():.0f}%", fontsize=8, color=col)
         ax.text(j + 0.28, max(v.min(), 1e-3), f"{v.min():.2f}%", fontsize=8, color=col)
-    ax.set_yscale("log"); ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels); ax.set_xlim(-0.5, len(labels) - 0.5 + 0.65)
+    ax.set_yscale("log")
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels)
+    ax.set_xlim(-0.5, len(labels) - 0.5 + 0.65)
     ax.set_ylabel(r"$\rho$  (%)")
     ax.set_title(r"C   acyclic, $\epsilon=0$: partitions at fixed $|\mathcal{D}|$",
                  loc="left", fontsize=10)
@@ -467,14 +568,23 @@ def stage_figure(args):
     print(f"figure written to {args.out}")
 
 
+# %%
+############################
+### Masked training
+############################
 
-# ===========================================================================
-# Retraining under a mask, and spike-train comparison
-# ===========================================================================
 
-
-def train_masked(neuron, trial, mask, trials, lr, k, checkpoints=None):
-    """Train with the mask in force throughout (eps = 0), from the same init.
+def train_masked(
+    neuron: QIFNeuron,
+    trial: dict,
+    mask: Array,
+    trials: int,
+    lr: float,
+    k: int,
+    checkpoints: list[int] | None = None,
+) -> tuple:
+    """
+    Train with the mask in force throughout (eps = 0), from the same init.
 
     This is a different optimisation problem from the intact one: the blocked
     synapses are absent for the whole trajectory, so the optimiser explores a
@@ -509,15 +619,17 @@ def train_masked(neuron, trial, mask, trials, lr, k, checkpoints=None):
     return p[0], p[1], float(loss)
 
 
-def stage_converge(args):
-    """Does the gradient become more local as the masked network trains?
+def stage_converge(args: argparse.Namespace) -> None:
+    """
+    Does the gradient become more local as the masked network trains?
 
     The mask is in force for the whole trajectory, and rho is measured at
     eps = 0 with that same mask at every checkpoint. For the sink condition rho
     is pinned at 0 by construction, so it serves as the control; for the
     acyclic condition rho is the non-returning family and is free to move.
     """
-    cfg = dict(BASE_CONFIG); cfg["seed"] = args.seed
+    cfg = dict(BASE_CONFIG)
+    cfg["seed"] = args.seed
     N, k = cfg["N"], args.k
     neuron = QIFNeuron(cfg["tau"], cfg["eps"], cfg["alpha"])
     trial = make_trial(cfg, args.ntar, args.w_scale)
@@ -543,11 +655,27 @@ def stage_converge(args):
             print(f"  {m['step']:6d} {m['train_loss']:11.4e} | "
                   f"{m['norm_exact']:10.3e} {m['norm_nonlocal']:11.3e} "
                   f"{m['rho_pct']:7.3f}% {m['cos']:10.6f} {m['Kout']:5d}")
-    json.dump(out, open(DATA_DIR / "converge.json", "w"))
+    with open(DATA_DIR / "converge.json", "w") as file:
+        json.dump(out, file)
 
 
-def spike_trains(neuron, trial, w, x0, mask, eps):
-    """Ordinary spike times of every neuron, as a list of sorted arrays."""
+# %%
+############################
+### Spike-train comparison
+############################
+
+
+def spike_trains(
+    neuron: QIFNeuron,
+    trial: dict,
+    w: Array,
+    x0: Array,
+    mask: Array,
+    eps: float,
+) -> list[np.ndarray]:
+    """
+    Ordinary spike times of every neuron, as a list of sorted arrays.
+    """
     cfg = trial["cfg"]
     out = neuron.event(x0, w_to_weights_net(apply_eps(w, mask, eps)),
                        trial["weights_in"], trial["spikes_in"], cfg)
@@ -558,8 +686,10 @@ def spike_trains(neuron, trial, w, x0, mask, eps):
     return [np.sort(t[net & (ids == i)]) for i in range(cfg["N"])]
 
 
-def compare_trains(a, b):
-    """Per-neuron comparison: spike count difference and worst timing shift."""
+def compare_trains(a: list[np.ndarray], b: list[np.ndarray]) -> list[dict]:
+    """
+    Per-neuron comparison: spike count difference and worst timing shift.
+    """
     rows = []
     for i, (x, y) in enumerate(zip(a, b)):
         if len(x) == len(y):
@@ -570,14 +700,16 @@ def compare_trains(a, b):
     return rows
 
 
-def stage_structural(args):
-    """Fixed weights, acyclic mask: U must be blind to row K, D must not.
+def stage_structural(args: argparse.Namespace) -> None:
+    """
+    Fixed weights, acyclic mask: U must be blind to row K, D must not.
 
     This is the structural claim behind the acyclic condition, checked directly
     rather than through the gradient. Nothing is retrained, so the dynamics are
     identical apart from the perturbation itself.
     """
-    cfg = dict(BASE_CONFIG); cfg["seed"] = args.seed
+    cfg = dict(BASE_CONFIG)
+    cfg["seed"] = args.seed
     N, k = cfg["N"], args.k
     neuron = QIFNeuron(cfg["tau"], cfg["eps"], cfg["alpha"])
     trial = make_trial(cfg, args.ntar, args.w_scale)
@@ -590,7 +722,7 @@ def stage_structural(args):
 
     rng = np.random.default_rng(args.part_seed)
     w_pert = np.asarray(w).copy()
-    w_pert[k] += 0.25 * rng.standard_normal(w_pert.shape[1])   # row K only
+    w_pert[k] += 0.25 * rng.standard_normal(w_pert.shape[1])  # row K only
     pert = spike_trains(neuron, trial, jnp.asarray(w_pert), x0, mask, 0.0)
 
     rows = compare_trains(base, pert)
@@ -606,9 +738,12 @@ def stage_structural(args):
     print(f"\n  U unchanged: {'YES' if not bad else 'NO  <-- structural bug'}")
 
 
-def stage_retrain(args):
-    """Train each condition to convergence and compare the spike trains."""
-    cfg = dict(BASE_CONFIG); cfg["seed"] = args.seed
+def stage_retrain(args: argparse.Namespace) -> None:
+    """
+    Train each condition to convergence and compare the spike trains.
+    """
+    cfg = dict(BASE_CONFIG)
+    cfg["seed"] = args.seed
     N, k = cfg["N"], args.k
     neuron = QIFNeuron(cfg["tau"], cfg["eps"], cfg["alpha"])
     trial = make_trial(cfg, args.ntar, args.w_scale)
@@ -648,35 +783,44 @@ def stage_retrain(args):
                      for r in rows if r["neuron"] in D)
         print(f"    U identical to intact: {same_U}     "
               f"D identical to intact: {same_D}\n")
-    json.dump(out, open(DATA_DIR / "retrain.json", "w"))
+    with open(DATA_DIR / "retrain.json", "w") as file:
+        json.dump(out, file)
 
 
-# ===========================================================================
+# %%
+############################
+### Command line
+############################
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage", choices=["train", "decompose", "partitions",
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("stage", choices=["train", "decompose", "partitions",
                                       "figure", "retrain", "structural",
                                       "converge"])
-    ap.add_argument("--k", type=int, default=0, help="reference neuron")
-    ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--ntar", type=int, default=1)
-    ap.add_argument("--w-scale", type=float, default=3.0)
-    ap.add_argument("--arch", default="sink", choices=["sink", "acyclic"])
-    ap.add_argument("--n-down", type=int, default=5, help="|D|")
-    ap.add_argument("--trials", type=int, default=400)
-    ap.add_argument("--lr", type=float, default=1e-2)
-    ap.add_argument("--checkpoints", type=int, nargs="+",
+    parser.add_argument("--k", type=int, default=0, help="reference neuron")
+    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--ntar", type=int, default=1)
+    parser.add_argument("--w-scale", type=float, default=3.0)
+    parser.add_argument("--arch", default="sink", choices=["sink", "acyclic"])
+    parser.add_argument("--n-down", type=int, default=5, help="|D|")
+    parser.add_argument("--trials", type=int, default=400)
+    parser.add_argument("--lr", type=float, default=1e-2)
+    parser.add_argument("--checkpoints", type=int, nargs="+",
                     default=[0, 10, 25, 50, 100, 200, 400])
-    ap.add_argument("--eps", type=float, nargs="+",
+    parser.add_argument("--eps", type=float, nargs="+",
                     default=[0.0, 0.25, 0.5, 1.0])
-    ap.add_argument("--n-partitions", type=int, default=6)
-    ap.add_argument("--part-seed", type=int, default=0)
-    ap.add_argument("--out", type=svg_path, default=str(FIGS_DIR / "main_figure.svg"))
-    ap.add_argument("--conds", nargs="+", default=["sink", "acyclic"],
+    parser.add_argument("--n-partitions", type=int, default=6)
+    parser.add_argument("--part-seed", type=int, default=0)
+    parser.add_argument("--out", type=svg_path, default=str(FIGS_DIR / "main_figure.svg"))
+    parser.add_argument("--conds", nargs="+", default=["sink", "acyclic"],
                     choices=["sink", "acyclic"])
-    args = ap.parse_args()
+    args = parser.parse_args()
+    return args
+
+
+def main() -> None:
+    args = parse_args()
     ensure_output_dirs()
     if args.stage == "figure":
         args.out = output_file(args.out)
