@@ -37,7 +37,8 @@ from jax import lax
 import experiment as ex
 
 
-def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None):
+def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None,
+                   offtarget=None, n_hidden_spikes=None, return_pieces=False):
     """spike_mix (trace mode only): optional array (ntar, nmax, N-1, N-1) holding
     (I + A^(i,k)) for target i and output index k. Each output's eligibility over
     its neuron's input weights (spikegd layout, self entry dropped) is multiplied
@@ -49,9 +50,24 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
         g_ij += sum_c ( sum_{m != i} sum_c' dL/dt_{c'_m} C[m, i, c', c] ) e_ij(t_{c_i}).
     The other target's learning signals are only all known at the end of the
     trial, so each output's eligibility and dL/dt are stored (ntar * nmax
-    vectors of length N + 2) and the term is added at trial end."""
+    vectors of length N + 2) and the term is added at trial end.
+
+    offtarget (trace mode only): optional array (N - ntar, ntar, nmax, Kh) of
+    coefficients C[l - ntar, m, c', c] for the non-target rows,
+        g_lj = sum_c ( sum_m sum_c' dL/dt_{c'_m} C[l - ntar, m, c', c] ) e_lj(t_{c_l}),
+    where c counts the ordinary spikes of non-target neuron l (spikes beyond the
+    first Kh are ignored). Eligibilities are then traced for all N neurons
+    (cost O(N^2) per event). Initial states of non-target neurons are not updated.
+
+    n_hidden_spikes / return_pieces: trace all N neurons and also return, as a
+    third output, the per-output dL/dt of the targets ("DL", (ntar, nmax)), their
+    per-output weight eligibilities ("EL", (ntar, nmax, N), network layout;
+    ordinary spikes first, then pseudospikes), the per-spike weight
+    eligibilities of the non-target neurons ("EH",
+    (N - ntar, Kh, N), network layout) and their spike counts ("HC")."""
     assert mode in ("trace", "closed")
-    assert (spike_mix is None and cross is None) or mode == "trace"
+    assert (spike_mix is None and cross is None and offtarget is None
+            and not return_pieces) or mode == "trace"
     cfg = trial["cfg"]
     N, T, K, eps = cfg["N"], cfg["T"], cfg["K"], neuron.eps
     denom = trial["denom"]
@@ -87,6 +103,11 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
 
     MIX = None if spike_mix is None else jnp.asarray(spike_mix)
     CROSS = None if cross is None else jnp.asarray(cross)
+    OFFT = None if offtarget is None else jnp.asarray(offtarget)
+    hidden = OFFT is not None or return_pieces
+    Kh = OFFT.shape[-1] if OFFT is not None else (n_hidden_spikes or 8)
+    NT = N if hidden else ntar          # neurons whose eligibilities are traced
+    store = CROSS is not None or hidden  # keep per-output dL/dt of the targets
 
     def mixed(k, c, vec):
         """Apply (I + A^(k,c)) to the weight part of a (D,) eligibility vector."""
@@ -104,17 +125,19 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
         state = (jnp.array(0.0), x0, neuron.dt_spike(x0), jnp.array(0))
 
         nmax = max(ns)
-        tr = {"cnt": jnp.zeros(ntar, int), "g": jnp.zeros((ntar, D)),
+        tr = {"cnt": jnp.zeros(NT, int), "g": jnp.zeros((ntar, D)),
               "tord": jnp.full((ntar, nmax), jnp.inf)}
         if mode == "trace":
             z0 = jnp.zeros((2, D)).at[0, N].set(1.0).at[1, N + 1].set(1.0)
-            tr["z"] = jnp.stack([z0] * ntar)                      # (ntar, 2, D)
-            tr["tau"] = jnp.zeros((ntar, D))                      # d(event time)
+            tr["z"] = jnp.stack([z0] * NT)                        # (NT, 2, D)
+            tr["tau"] = jnp.zeros((NT, D))                        # d(event time)
             tr["sig"] = jnp.stack([grad_dt_spike(x0[:, k]) @ z0   # d(next spike of k)
-                                   for k in range(ntar)])
-            if CROSS is not None:
+                                   for k in range(NT)])
+            if store:
                 tr["EL"] = jnp.zeros((ntar, nmax, D))    # eligibility of each output
                 tr["DL"] = jnp.zeros((ntar, nmax))       # dL/dt of each output
+            if hidden:
+                tr["EH"] = jnp.zeros((N - ntar, Kh, D))  # eligibility of each hidden spike
         else:
             tr["P"] = jnp.zeros(N)
             tr["s"] = jnp.stack([grad_dt_spike(x0[:, k])[1] for k in range(ntar)])
@@ -133,7 +156,7 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
 
             if mode == "trace":
                 zs, taus, sigs = [], [], []
-                for k in range(ntar):
+                for k in range(NT):
                     is_k = net_spike & (j_net == k)
                     tau_new = jnp.where(is_k, tr["sig"][k], 0.0)   # surround: fixed
                     ddt = tau_new - tr["tau"][k]
@@ -150,13 +173,20 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
                                     tau_new + grad_dt_spike(x_new[:, k]) @ zn,
                                     tr["sig"][k])
                     c = cnt[k]
-                    dl = jnp.where(is_k, dloss_dt(k, c, t_new), 0.0)
-                    g = g.at[k].add(dl * mixed(k, c, tau_new))
-                    if CROSS is not None:
-                        ok = is_k & (c < ns[k])
-                        ci = jnp.minimum(c, nmax - 1)
-                        tr["EL"] = tr["EL"].at[k, ci].set(jnp.where(ok, tau_new, tr["EL"][k, ci]))
-                        tr["DL"] = tr["DL"].at[k, ci].set(jnp.where(ok, dl, tr["DL"][k, ci]))
+                    if k < ntar:
+                        dl = jnp.where(is_k, dloss_dt(k, c, t_new), 0.0)
+                        g = g.at[k].add(dl * mixed(k, c, tau_new))
+                        if store:
+                            ok = is_k & (c < ns[k])
+                            ci = jnp.minimum(c, nmax - 1)
+                            tr["EL"] = tr["EL"].at[k, ci].set(
+                                jnp.where(ok, tau_new, tr["EL"][k, ci]))
+                            tr["DL"] = tr["DL"].at[k, ci].set(jnp.where(ok, dl, tr["DL"][k, ci]))
+                    else:
+                        ok = is_k & (c < Kh)
+                        ci = jnp.minimum(c, Kh - 1)
+                        tr["EH"] = tr["EH"].at[k - ntar, ci].set(
+                            jnp.where(ok, tau_new, tr["EH"][k - ntar, ci]))
                     zs.append(zn); taus.append(tau_new); sigs.append(sig)
                 tr["z"], tr["tau"], tr["sig"] = jnp.stack(zs), jnp.stack(taus), jnp.stack(sigs)
             else:
@@ -174,12 +204,13 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
                 P = P_prev * jnp.exp(-2 * dt / neuron.tau)
                 tr["P"] = P + jnp.where(net_spike, jax.nn.one_hot(j_net, N), 0.0)
 
-            for k in range(ntar):
+            for k in range(NT if mode == "trace" else ntar):
                 is_k = net_spike & (j_net == k)
                 c = cnt[k]
-                ok = is_k & (c < ns[k])
-                tord = tord.at[k, jnp.minimum(c, nmax - 1)].set(
-                    jnp.where(ok, t_new, tord[k, jnp.minimum(c, nmax - 1)]))
+                if k < ntar:
+                    ok = is_k & (c < ns[k])
+                    tord = tord.at[k, jnp.minimum(c, nmax - 1)].set(
+                        jnp.where(ok, t_new, tord[k, jnp.minimum(c, nmax - 1)]))
                 cnt = cnt.at[k].add(is_k.astype(int))
             tr["cnt"], tr["g"], tr["tord"] = cnt, g, tord
             return (state_new, tr), None
@@ -217,7 +248,7 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
             else:
                 g = g.at[k, :N].add(gx[1] * tr["P"] + gwr)
 
-            if CROSS is not None:
+            if store:
                 # store eligibility and dL/dt of this neuron's pseudospike outputs
                 def ftimes(xk, wrow, n=n, Kout=Kout, cs=cs):
                     return neuron.t_pseudo(xk, neuron.linear(rates, wrow), cs + 1 - Kout, cfg)
@@ -238,8 +269,16 @@ def make_fast_grad(neuron, trial, ntar, mode="trace", spike_mix=None, cross=None
                 g = g.at[i, :N].add(S[:ns[i]] @ tr["EL"][i, :ns[i], :N])
 
         gw_net = jnp.zeros((N, N)).at[:ntar].set(g[:, :N])
+        if OFFT is not None:
+            # non-target rows: sum_c S_lc e_l.(t_{c_l}), with
+            # S_lc = sum_m sum_c' dL/dt_{c'_m} C[l - ntar, m, c', c]
+            S = jnp.einsum("mc,lmcd->ld", tr["DL"], OFFT)             # (N - ntar, Kh)
+            gw_net = gw_net.at[ntar:].set(jnp.einsum("ld,ldj->lj", S, tr["EH"][:, :, :N]))
         gw = jnp.take_along_axis(gw_net, OFFDIAG, axis=1)
         gx0 = jnp.zeros((2, N)).at[:, :ntar].set(g[:, N:].T)
+        if return_pieces:
+            return loss, (gw, gx0), {"DL": tr["DL"], "EL": tr["EL"][:, :, :N],
+                                     "EH": tr["EH"][:, :, :N], "HC": tr["cnt"][ntar:]}
         return loss, (gw, gx0)
 
     return fn

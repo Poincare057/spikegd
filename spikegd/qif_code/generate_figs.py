@@ -12,6 +12,8 @@ Jacobians, f'(x) = Im f(x + i h) / h.
 import argparse
 from pathlib import Path
 
+from results import OUTPUT_DIR, capture_results
+
 import numpy as np
 
 H = 1e-30           # complex-step size
@@ -183,7 +185,7 @@ def configure_style():
     return plt
 
 
-def save(fig, name, output_dir="."):
+def save(fig, name, output_dir=OUTPUT_DIR):
     """Save a figure as SVG, then release it."""
     import matplotlib.pyplot as plt
 
@@ -195,7 +197,7 @@ def save(fig, name, output_dir="."):
         plt.close(fig)
 
 
-def generate_r1_train(output_dir="."):
+def generate_r1_train(output_dir=OUTPUT_DIR):
     """Fig. 2(a): R1, current with and without the recurrent synapse.
     One external input (w=10 at t=0.3) starts the neuron from V0=b0=0; each output re-enters after d=0.15 through w_j.
     Uses the exact event-driven simulation of this module."""
@@ -239,7 +241,7 @@ def generate_r1_train(output_dir="."):
     save(fig, 'r1_train', output_dir)
 
 
-def generate_qr_train(output_dir="."):
+def generate_qr_train(output_dir=OUTPUT_DIR):
     """Fig. (App. G): along the outputs after one input, QR exponents go to 0 while the gradient magnitude grows.
     Case 1b: one input of weight w at t=0.1 from V0=b0=0, chosen so that c2/pi = 5.5, 10.5, 20.5 (k = 6, 11, 21 outputs).
     QR (Benettin) on the product of the out->out event Jacobians, QR after every map, Q0 = identity.
@@ -271,7 +273,7 @@ def generate_qr_train(output_dir="."):
     fig.tight_layout(w_pad=1.5); save(fig, 'qr_train', output_dir)
 
 
-def generate_capacity(output_dir="."):
+def generate_capacity(output_dir=OUTPUT_DIR):
     """Fig. (App. G): the number of learnable outputs is set by the current at the last input of each group and by the gap.
     Poisson inputs: n input times uniform on [0,T] (Poisson conditioned on n), one synapse of weight W=250, V0=b0=0, 300 draws per (n,T).
     (a) outputs in each gap against x = sqrt(B)(1-e^{-G})/pi, with the exact count of Prop. 4.
@@ -314,7 +316,7 @@ def generate_capacity(output_dir="."):
     fig.tight_layout(w_pad=1.0); save(fig, 'capacity', output_dir)
 
 
-def generate_qr_seeds(output_dir="."):
+def generate_qr_seeds(output_dir=OUTPUT_DIR):
     """Fig. (App. G): which sources of variation the QR exponents forget.
     Baseline trial: Poisson inputs at rate 1 on [0,60] over l=2 synapses, weights U(150,350), V0~U(-0.5,0.5), b0~U(0,3).
     Four seeds, varied one at a time with the other three at the baseline (as in Toolkit 2, Sec. 6):
@@ -357,7 +359,7 @@ def generate_qr_seeds(output_dir="."):
     fig.tight_layout(w_pad=1.0); save(fig, 'qr_seeds', output_dir)
 
 
-def generate_random_weights(output_dir="."):
+def generate_random_weights(output_dir=OUTPUT_DIR):
     """Fig. (App. F): with random weights the amplification is usually modest, but it has a heavy tail at the capacity boundary.
     l=100 synapses, one input each at a time uniform on [0,1], weights w_i ~ N(0, g^2/sqrt(l)) (g=1 is variance 1/sqrt(l)),
     V0=b0=0, 1000 draws per gain g in {1,10,30,100,300}, trial T=40 so trains run out.
@@ -413,7 +415,7 @@ def generate_random_weights(output_dir="."):
     fig.tight_layout(w_pad=0.6); save(fig, 'random_weights', output_dir)
 
 
-def generate_pseudospike(output_dir=".", *, recompute=False):
+def generate_pseudospike(output_dir=OUTPUT_DIR, *, recompute=False):
     """Fig. 5: a pseudospike added after the trial carries a gradient that decays like e^{-Delta T}.
     Numerical probe, outside (A4). Uses Klos & Memmesheimer's spikegd (https://github.com/chklos/spikegd) for the simulation, the
     pseudospike time and the gradients (JAX autodiff, float64):
@@ -445,7 +447,7 @@ def generate_pseudospike(output_dir=".", *, recompute=False):
         return abs(float(jax.grad(t_ps)(w0))/float(jax.grad(last_out)(w0)))
 
     DT = np.array([0.02, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 6])
-    CACHE = Path(output_dir) / 'pseudospike_data.npz'                 # delete it (or pass --recompute) to rerun the simulations
+    CACHE = Path(output_dir) / 'data' / 'pseudospike_data.npz'                 # delete it (or pass --recompute) to rerun the simulations
     if CACHE.exists() and not recompute:
         with np.load(CACHE) as cached:
             data = dict(cached)
@@ -485,8 +487,6 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("figures", nargs="*", metavar="FIGURE",
                         help="Figures to generate (default: all): " + ", ".join(FIGURES))
-    parser.add_argument("--output-dir", type=Path, default=Path("."),
-                        help="Directory for figures and the pseudospike cache (default: current directory)")
     parser.add_argument("--recompute", action="store_true",
                         help="Recompute the pseudospike cache using JAX and spikegd")
     args = parser.parse_args(argv)
@@ -495,7 +495,8 @@ def main(argv=None):
             parser.error(f"unknown figure {name!r}; choose from: {', '.join(FIGURES)}")
     for name in args.figures or FIGURES:
         kwargs = {"recompute": args.recompute} if name == "pseudospike" else {}
-        FIGURES[name](args.output_dir, **kwargs)
+        with capture_results(f"FIGURE_{name.upper()}", f"Figure: {name}"):
+            FIGURES[name](OUTPUT_DIR, **kwargs)
 
 
 if __name__ == "__main__":

@@ -5,17 +5,16 @@ Three independent references are used:
   SGD   Klos & Memmesheimer's spikegd (JAX, float64): its own closed forms, and JAX autodiff through its event-based simulation;
   FD    central differences (h = 1e-6, float64) of whole simulated trials.
 The quantities under test are the paper's formulas transcribed in paper_forms.py, and gradients assembled only from them (rtrl_paper.py).
-Run: python3 fd_check_all.py   ->  ../RUN_RESULTS.md (tables, JSON records and execution log)
+Run: python3 fd_check_all.py   ->  output/RUN_RESULTS.md (tables, JSON records and execution log)
 """
-import json, time, sys, os
-from pathlib import Path
+import json, time
 import numpy as np, mpmath as mp
 from scipy.integrate import solve_ivp
 import jax, jax.numpy as jnp
 import paper_forms as P, rtrl_paper as R, sg
 from r1_sim import r1_outputs
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'figs'))
-from spikegd.qif_code.figs.generate_figs import qr_accumulate
+from generate_figs import qr_accumulate
+from results import write_section
 mp.mp.dps = 50
 rng = np.random.default_rng(2026)
 REC = []
@@ -24,24 +23,13 @@ LOG = []
 
 def write_results(lines, records, log, output_path=None):
     """Replace only the FD section in the shared results file on each run."""
-    if output_path is None:
-        output_path = Path(__file__).resolve().parents[1] / 'RUN_RESULTS.md'
-    start = '<!-- FD_RESULTS_START -->'
-    end = '<!-- FD_RESULTS_END -->'
-    section = '\n'.join([
-        start, *lines,
+    content = '\n'.join([
+        *lines,
         '### Machine-readable FD results', '', '```json',
         json.dumps(records, indent=1), '```', '',
-        '### FD execution log', '', '```text', *log, '```', end,
+        '### FD execution details', '', '```text', *log, '```',
     ])
-    existing = output_path.read_text(encoding='utf-8') if output_path.exists() else ''
-    if start in existing and end in existing:
-        before, remainder = existing.split(start, 1)
-        _, after = remainder.split(end, 1)
-        result = before + section + after
-    else:
-        result = existing.rstrip() + '\n\n## Full gradient validation\n\n' + section + '\n'
-    output_path.write_text(result, encoding='utf-8')
+    write_section('FD_RESULTS', 'Full gradient validation', content, output_path)
 
 
 def record(section, check, paper, ref, ours, refv, tol, note='', rel_floor=1.0, allow_nonfinite=False, expected_fail=False):
