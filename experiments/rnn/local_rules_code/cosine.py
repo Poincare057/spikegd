@@ -12,7 +12,6 @@ inputs without jitter. For every neuron i (row i of w: its input weights),
 If the rule gives row i no update at that point (|g_i.| = 0: local rule on
 off-target rows, or a neuron that did not spike), cos_i is undefined and
 stored as NaN.
-
 """
 import argparse
 import json
@@ -99,7 +98,7 @@ def run(args: argparse.Namespace) -> dict:
             if sig[s] == 0:
                 v[s, 1:] = v[s, 0]
 
-        # Cosine per row; undefined where the rule (or exact gradient) is zero
+        # Cosine per row. undefined where the rule (or exact gradient) is zero
         norm_rule, norm_exact, dot = v[..., 0, :], v[..., 1, :], v[..., 2, :]
         with np.errstate(invalid="ignore", divide="ignore"):
             cos = np.where(

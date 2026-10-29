@@ -18,8 +18,7 @@ Two graph conditions remove indirect paths, interpolated by eps in [0, 1]:
             sends only into D, and nothing in D reaches U or K. Cycles through
             K are gone but K still drives the network.
 At eps = 0 either condition makes g_local and g_exact the same object, so
-rho = 0 exactly. That is a test of the implementation, not a result; both bugs
-found while writing this showed up as a violation of it.
+rho = 0 exactly. 
 
 Usage:
     python experiment.py train        --trials 400
@@ -120,8 +119,7 @@ def acyclic_mask(N: int, k: int, D: Iterable[int]) -> Array:
     Block the synapses that would close a cycle through K.
 
     D is the downstream set; U is everything else except K. Blocked blocks are
-    D -> U, D -> K and K -> U. The last is easy to miss and is not optional:
-    without it K -> U -> K is still a cycle.
+    D -> U, D -> K and K -> U.
     """
     D = list(D)
     U = [i for i in range(N) if i != k and i not in D]

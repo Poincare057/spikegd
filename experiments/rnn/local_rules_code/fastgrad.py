@@ -63,7 +63,6 @@ def _make_flow_jvp(neuron: QIFNeuron) -> Callable:
     """
     Creates a flow derivative that propagates all eligibility directions.
     """
-
     def flow_jvp(x: Array, dt: Array, z: Array, ddt: Array) -> Array:
         return jax.jvp(neuron.flow, (x, dt), (z, ddt))[1]
 
@@ -148,7 +147,7 @@ def make_fast_grad(
         """Sum of loss terms of target k for output times ts (len n_k)."""
         tar = tars[k]
         cs = jnp.arange(ns[k])
-        ts = jnp.where(active, ts, tar)  # keep inactive terms finite
+        ts = jnp.where(active, ts, tar)
         gate = jnp.where(cs == ns[k] - 1, ts < tar, True) & active
         return jnp.sum(jnp.where(gate, ((ts - tar) / (tar + 2)) ** 2, 0.0)) / denom
 
@@ -161,8 +160,8 @@ def make_fast_grad(
     OFFT = None if offtarget is None else jnp.asarray(offtarget)
     hidden = OFFT is not None or return_pieces
     Kh = OFFT.shape[-1] if OFFT is not None else (n_hidden_spikes or 8)
-    NT = N if hidden else ntar  # neurons whose eligibilities are traced
-    store = CROSS is not None or hidden  # keep per-output dL/dt of the targets
+    NT = N if hidden else ntar
+    store = CROSS is not None or hidden
 
     def mixed(k: int, c: Array, vec: Array) -> Array:
         """Apply (I + A^(k,c)) to the weight part of a (D,) eligibility vector."""
