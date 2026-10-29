@@ -4,10 +4,14 @@ Figures from train.py and cosine.py.
   output/figs/fig_loss.svg    A: clean-input loss over training, one panel
                      per rule, one line per sigma (median, interquartile band)
                   B: final loss on held-out jittered inputs vs sigma
-  output/figs/fig_cosine.svg  C: cosine similarity with the exact gradient on the target
-                     rows over training, local and fitted rule
-                  D: cosine similarity over all of training vs sigma, on the
-                     target rows, all rows and off-target rows
+  output/figs/fig_cosine.svg  A: per-neuron cosine similarity with the exact
+                     gradient (row i of w), over all of training, for every
+                     neuron, sigma and approximate rule
+                  B: fraction of saved points at which the rule updates row i
+  output/figs/fig_cosine_neurons.svg  the same cosine over training for
+                     selected neurons (--neurons), one row of panels per rule
+
+Points where a rule leaves row i unchanged have no cosine and are left out.
 
 Usage (from experiments/rnn/local_rules_code/):
 
@@ -16,6 +20,7 @@ Usage (from experiments/rnn/local_rules_code/):
 
 import argparse
 import json
+import warnings
 
 import matplotlib
 
@@ -82,17 +87,21 @@ def curves(
     ylog: bool,
 ) -> None:
     """
-    Median and interquartile band over seeds, one line per sigma; v (S, R, B).
+    Median and interquartile band over seeds (NaN left out), one line per sigma;
+    v (S, R, B).
     """
     for si, s in enumerate(sig):
+        with warnings.catch_warnings():  # all-NaN slices: no update at that point
+            warnings.simplefilter("ignore", RuntimeWarning)
+            q1, q3 = np.nanpercentile(v[si], [25, 75], axis=0)
+            med = np.nanmedian(v[si], 0)
         if s > 0:
-            q1, q3 = np.percentile(v[si], [25, 75], axis=0)
             ax.fill_between(
                 trials, q1, q3, color=SIGMA_COLOR[float(s)], alpha=0.2, lw=0
             )
         ax.plot(
             trials,
-            np.median(v[si], 0),
+            med,
             color=SIGMA_COLOR[float(s)],
             lw=1.6 if s == 0 else 1.3,
             label=f"σ = {s:g}",
@@ -183,70 +192,164 @@ def fig_loss(args: argparse.Namespace) -> None:
     print(f"  figure -> {args.loss_out}")
 
 
+def seed_runs(v: np.ndarray, sig: np.ndarray) -> list[np.ndarray]:
+    """
+    Values (S, R, ...) -> per sigma, the distinct runs only (sigma = 0 is one run).
+    """
+    return [v[si, :1] if s == 0 else v[si] for si, s in enumerate(sig)]
+
+
 def fig_cosine(args: argparse.Namespace) -> None:
     """
-    Plots cosine similarity along training and across input jitter levels.
+    Plots the per-neuron cosine similarity over all of training, for every
+    neuron, sigma and rule, and how often each row is updated.
     """
 
     ### Unpack recordings
     d = np.load(args.cosine)
-    sig, trials = d["sigmas"], d["trials"]
-    rules = [r for r in ("local", "fitted") if r in d]
-    R = d[rules[0]].shape[1]
-    nc = len(rules)
+    sig = d["sigmas"]
+    ntar = int(d["n_targets"])
+    rules = [r for r in ("local", "fitted") if f"{r}_cos" in d]
+    N = d[f"{rules[0]}_cos"].shape[-1]
+    R = d[f"{rules[0]}_cos"].shape[1]
+    x = np.arange(N)
 
-    ### Similarity along training
     fig, axes = plt.subplots(
-        1,
-        nc + 1,
-        figsize=(4 * (nc + 1), 3.6),
-        gridspec_kw={"width_ratios": [1] * nc + [1.1], "wspace": 0.3},
+        2,
+        len(rules),
+        figsize=(5.2 * len(rules), 5.2),
+        squeeze=False,
+        gridspec_kw={"height_ratios": [2.2, 1], "hspace": 0.45, "wspace": 0.2},
     )
     for c, r in enumerate(rules):
-        ax = axes[c]
-        curves(ax, trials, d[r][..., 0], sig, ylog=False)
-        ax.set_ylim(-0.4, 1.05)
-        ax.axhline(1, color=GRID, lw=0.8)
-        ax.set_title(f"{'C' if c == 0 else ' '}   {NAMES[r]}", loc="left", fontsize=9.5)
-        if c == 0:
-            ax.set_ylabel("cosine similarity with exact gradient\n(target rows)")
-            ax.legend(frameon=False, fontsize=7, loc="lower left")
+        runs = seed_runs(d[f"{r}_cos"], sig)  # per sigma: (R', B, N)
+        ax, axf = axes[0, c], axes[1, c]
 
-    ### Similarity over all recorded parameters
-    series = []
-    for r in rules:
-        for p, ls in [(0, "-"), (1, ":"), (2, "--")]:
-            if r == "local" and p == 2:
-                continue  # local does not update off-target rows
-            series.append(
-                (
-                    f"{NAMES[r]}, {str(d['parts'][p])}",
-                    d[r][..., p].reshape(len(sig), -1),
-                    dict(ls=ls, **STYLE[r]),
-                )
+        ### Cosine per neuron and sigma; fraction of points with an update
+        for si, s in enumerate(sig):
+            v = runs[si].reshape(-1, N)  # all saved points
+            ok = np.isfinite(v)
+            upd = ok.mean(0)
+            stats = np.full((3, N), np.nan)  # median, q1, q3
+            for i in range(N):
+                if upd[i] > 0:
+                    stats[:, i] = np.percentile(v[ok[:, i], i], [50, 25, 75])
+            med, q1, q3 = stats
+            off = (si - (len(sig) - 1) / 2) * 0.22
+            col = SIGMA_COLOR[float(s)]
+            ax.errorbar(
+                x + off,
+                med,
+                yerr=[med - q1, q3 - med],
+                color=col,
+                marker="o",
+                ls="none",
+                ms=4.5,
+                capsize=2,
+                elinewidth=1,
+                label=f"σ = {s:g}",
             )
-    ax = axes[nc]
-    summary(ax, sig, series)
-    ax.set_ylim(-0.6, 1.05)
-    ax.axhline(0, color=GRID, lw=0.8)
-    ax.set_ylabel("cosine similarity with exact gradient")
-    ax.set_title("D   over all of training", loc="left", fontsize=9.5)
-    ax.legend(
-        frameon=False, fontsize=6.5, loc="upper center", bbox_to_anchor=(0.5, -0.2)
-    )
+            axf.bar(x + off, upd, width=0.2, color=col)
+
+        ### Axes
+        ax.axvspan(-0.5, ntar - 0.5, color=GRID, alpha=0.18, lw=0)
+        ax.text(0, 1.12, "targets", color=MUTED, fontsize=7)
+        ax.axhline(0, color=GRID, lw=0.8)
+        ax.set_ylim(-1.08, 1.2)
+        ax.set_xticks(x)
+        ax.set_xlim(-0.6, N - 0.4)
+        ax.grid(alpha=0.3, lw=0.5, axis="y")
+        ax.set_title(f"{'A' if c == 0 else ' '}   {NAMES[r]}", loc="left", fontsize=9.5)
+        axf.set_ylim(0, 1.05)
+        axf.set_xticks(x)
+        axf.set_xlim(-0.6, N - 0.4)
+        axf.set_xlabel("neuron i")
+        axf.grid(alpha=0.3, lw=0.5, axis="y")
+        axf.set_title(
+            f"{'B' if c == 0 else ' '}   fraction of saved points with an update of row i",
+            loc="left",
+            fontsize=8.5,
+        )
+        if c == 0:
+            ax.set_ylabel("cosine similarity of row i\nwith exact gradient")
+            ax.legend(frameon=False, fontsize=7, loc="lower left")
+            axf.set_ylabel("fraction")
     fig.suptitle(
-        "Cosine similarity of each rule's update with the exact gradient along the "
-        f"rule's own training (inputs without jitter; median and interquartile range "
-        f"over {R} noise seeds)",
+        "Per-neuron cosine similarity of each rule's gradient with the exact gradient "
+        "(row i of w; along the rule's own training, inputs without jitter; median "
+        f"and interquartile range over saved trials and {R} noise seeds)",
         x=0.01,
-        y=1.04,
+        y=1.0,
         ha="left",
-        fontsize=10.5,
+        fontsize=10,
     )
 
     ### Save figure
     fig.savefig(args.cosine_out, format="svg", bbox_inches="tight", facecolor=BG)
     print(f"  figure -> {args.cosine_out}")
+
+
+def fig_neurons(args: argparse.Namespace) -> None:
+    """
+    Plots the per-neuron cosine similarity over training for selected neurons.
+    """
+
+    ### Unpack recordings
+    d = np.load(args.cosine)
+    sig, trials = d["sigmas"], d["trials"]
+    ntar = int(d["n_targets"])
+    rules = [r for r in ("local", "fitted") if f"{r}_cos" in d]
+    nn = len(args.neurons)
+
+    fig, axes = plt.subplots(
+        len(rules),
+        nn,
+        figsize=(3.2 * nn, 2.9 * len(rules)),
+        squeeze=False,
+        gridspec_kw={"hspace": 0.5, "wspace": 0.25},
+    )
+    for a, r in enumerate(rules):
+        cos = d[f"{r}_cos"]  # (S, R, B, N)
+        for b, i in enumerate(args.neurons):
+            ax = axes[a, b]
+            kind = "target" if i < ntar else "off-target"
+            ax.set_title(f"{NAMES[r]}\nneuron {i} ({kind})", loc="left", fontsize=8.5)
+            if not np.any(np.isfinite(cos[..., i])):  # never updated by this rule
+                ax.text(
+                    0.5,
+                    0.5,
+                    "not updated\nby this rule",
+                    ha="center",
+                    va="center",
+                    color=MUTED,
+                    transform=ax.transAxes,
+                )
+                ax.set_xticks([])
+                ax.set_yticks([])
+                for sp in ax.spines.values():
+                    sp.set_visible(False)
+                continue
+            curves(ax, trials, cos[..., i], sig, ylog=False)
+            ax.set_ylim(-1.05, 1.05)
+            ax.axhline(0, color=GRID, lw=0.8)
+            if b == 0:
+                ax.set_ylabel("cosine similarity of row i\nwith exact gradient")
+            if a == 0 and b == 0:
+                ax.legend(frameon=False, fontsize=7, loc="lower left")
+    R = d[f"{rules[0]}_cos"].shape[1]
+    fig.suptitle(
+        "Per-neuron cosine similarity with the exact gradient over training (row i "
+        "of w: neuron i's input weights; inputs without jitter; median and "
+        f"interquartile range over {R} noise seeds; gaps: no update of row i)",
+        x=0.01,
+        y=1.02,
+        ha="left",
+        fontsize=10,
+    )
+
+    ### Save figure
+    fig.savefig(args.neurons_out, format="svg", bbox_inches="tight", facecolor=BG)
+    print(f"  figure -> {args.neurons_out}")
 
 
 # %%
@@ -267,6 +370,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cosine-out", type=svg_path, default=str(FIGS_DIR / "fig_cosine.svg")
     )
+    parser.add_argument(
+        "--neurons",
+        type=int,
+        nargs="+",
+        default=[0, 1, 4, 7, 8],
+        help="neurons for fig_cosine_neurons.svg (0, 1 are the targets)",
+    )
+    parser.add_argument(
+        "--neurons-out",
+        type=svg_path,
+        default=str(FIGS_DIR / "fig_cosine_neurons.svg"),
+    )
     args = parser.parse_args()
     return args
 
@@ -276,9 +391,11 @@ def main() -> None:
     ensure_output_dirs()
     args.loss_out = output_file(args.loss_out)
     args.cosine_out = output_file(args.cosine_out)
+    args.neurons_out = output_file(args.neurons_out)
     setup()
     fig_loss(args)
     fig_cosine(args)
+    fig_neurons(args)
 
 
 if __name__ == "__main__":

@@ -13,8 +13,8 @@ Three update rules are trained under input spike-time jitter σ ∈ {0, 0.05, 0.
 - **fitted**: local + A + C, including the off-target rows.
 
 For each rule the code records the loss over training, the final loss on
-held-out jittered inputs, and the cosine similarity of its update with the
-exact gradient.
+held-out jittered inputs, and the per-neuron cosine similarity of its gradient
+with the exact gradient.
 
 ---
 
@@ -131,9 +131,9 @@ spikes.
 | `fastgrad.py` | `make_fast_grad(..., "trace")`: one-pass eligibility traces. Options: `spike_mix` (I + A), `cross` (target C), `offtarget` (off-target C, traces all neurons), `return_pieces` (per-output ∂L/∂t and eligibilities, used by `fit.py collect`). |
 | `fit.py` | `collect`: replays the published exact run and records ∂L/∂t, per-output and per-spike eligibilities and the exact gradient. `fit`: fits A, C and the off-target C, and prints held-out relative error and cosine similarity per row. |
 | `train.py` | trains `exact`, `local`, `fitted` for each (σ, noise seed). All seeds of a rule run in parallel. Records the clean-input loss and the parameters every 50 trials, and the final loss on 30 held-out jittered inputs. |
-| `cosine.py` | at the saved parameters, every 250 trials, compares each rule's gradient with the exact gradient (cosine similarity on target rows, all rows and off-target rows) |
+| `cosine.py` | at the parameters saved along each rule's own runs, every 250 trials, evaluates the rule's gradient g and the exact gradient G = ∂L/∂w on the inputs without jitter, and computes for every neuron i the cosine similarity of row i (its input weights): cos_i = Σ_j g_ij G_ij / (‖g_i·‖ ‖G_i·‖). Undefined (NaN) where the rule leaves row i unchanged (local rule on off-target rows; a neuron that did not spike). |
 | `output_paths.py` | shared data and figure directories, anchored to this folder |
-| `plot.py` | `output/figs/fig_loss.svg` and `output/figs/fig_cosine.svg` |
+| `plot.py` | `output/figs/fig_loss.svg`, `output/figs/fig_cosine.svg` and `output/figs/fig_cosine_neurons.svg` |
 
 Plus the `spikegd` package itself, which provides the neuron model and the
 event-based simulation. `experiment.py` imports the shared
@@ -171,13 +171,15 @@ decomposition, partitions, convergence and retraining results, and save
 | `output/data/fit_rule.json` | `fit.py fit` | `train.py`, `cosine.py` |
 | `output/data/train_results.npz` | `train.py` | `cosine.py`, `plot.py` |
 | `output/data/cosine_results.npz` | `cosine.py` | `plot.py` |
+| `output/data/cosine_per_neuron.csv` | `cosine.py` | (every per-neuron value: rule, σ, seed, trial, neuron, cosine, row norms) |
 
 ### Figures
 
 | file | contents |
 |---|---|
 | `output/figs/fig_loss.svg` | A: loss on inputs without jitter over training, one panel per rule, one line per σ. B: final held-out jittered loss vs σ. |
-| `output/figs/fig_cosine.svg` | C: cosine similarity on the target rows over training, local and fitted rule. D: cosine similarity over all of training vs σ, on target rows, all rows and off-target rows. |
+| `output/figs/fig_cosine.svg` | A: per-neuron cosine similarity for every neuron i, per σ and rule (median and interquartile range over saved trials and seeds; points without an update of row i left out). B: fraction of saved points at which the rule updates row i. |
+| `output/figs/fig_cosine_neurons.svg` | per-neuron cosine similarity over training for targets 0, 1 and off-target neurons 4, 7, 8 (`plot.py --neurons` to choose), one row of panels per rule |
 
 ---
 
@@ -210,7 +212,7 @@ CPU on mains power.
    ```
 
 3. **Train**: σ ∈ {0, 0.05, 0.2}, 5 noise seeds, writes `output/data/train_results.npz`.
-   It takes TIMING_TRAIN in total; `fitted` is the slowest.
+   It takes about 40 min in total: exact 6 min, local 4 min, fitted 30 min.
 
    ```bash
    python train.py
@@ -219,13 +221,15 @@ CPU on mains power.
    Options: `--sigmas` (any subset of 0, 0.025, 0.05, 0.1, 0.2), `--n-seeds`,
    and `--rules` (rerun some rules and keep the others in the file).
 
-4. **Cosine similarities** (about TIMING_COSINE; writes `output/data/cosine_results.npz`):
+4. **Cosine similarities** (about 2 min; writes `output/data/cosine_results.npz`
+   and `output/data/cosine_per_neuron.csv`):
 
    ```bash
    python cosine.py
    ```
 
-5. **Figures** (seconds; writes `output/figs/fig_loss.svg` and `output/figs/fig_cosine.svg`):
+5. **Figures** (seconds; writes `output/figs/fig_loss.svg`, `output/figs/fig_cosine.svg`
+   and `output/figs/fig_cosine_neurons.svg`):
 
    ```bash
    python plot.py
@@ -241,6 +245,13 @@ CPU on mains power.
 - **σ = 0 is a single deterministic run,** copied across seeds in the results.
   Noise-free training is chaotic: round-off differences (machine, JAX version,
   batched vs single runs) can change its final loss several-fold.
+- **Training is chaotic at every σ.** Perturbations of order 1e-13 (in the
+  fitted coefficients or the batch size) change individual runs. With 5 seeds
+  the medians can shift noticeably between otherwise identical runs; for
+  example the fitted rule's median at σ = 0.2 was 0.052 in one run and
+  0.033 in another. Use more seeds (`--n-seeds`) for firm comparisons.
+- `cosine.py` may print an XLA "constant folding ... taking > 1s" message
+  while compiling. It is harmless.
 - **Noise streams are paired.** The noise draws for a given σ and seed are the
   same in every rule and in any σ subset. They come from σ's position in the
   fixed grid (0, 0.025, 0.05, 0.1, 0.2).
