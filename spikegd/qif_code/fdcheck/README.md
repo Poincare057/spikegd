@@ -1,7 +1,9 @@
 # fdcheck: finite-difference and cross-implementation check of every closed form
 
-`fd_check_all.py` checks every closed form and every gradient in `theory_condensed.tex` and writes `FD_REPORT.md` (tables by section)
-and `fd_results.json` (one record per check). It takes about 10 minutes on a laptop CPU.
+`fd_check_all.py` checks every closed form and every gradient in `theory_condensed.tex` and writes all FD output to
+[`../RUN_RESULTS.md`](../RUN_RESULTS.md): tables by section, JSON records (one per check), and the execution log.
+Each run replaces the marked FD section while preserving other results. The output path is relative to the script,
+so it does not depend on the working directory. It takes about 10 minutes on a laptop CPU.
 
 ## What is under test
 

@@ -10,7 +10,6 @@ input is (V0, b), with the external input time fixed; after an output it is
 Jacobians, f'(x) = Im f(x + i h) / h.
 """
 import argparse
-from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 
 import numpy as np
@@ -488,22 +487,15 @@ def main(argv=None):
                         help="Figures to generate (default: all): " + ", ".join(FIGURES))
     parser.add_argument("--output-dir", type=Path, default=Path("."),
                         help="Directory for figures and the pseudospike cache (default: current directory)")
-    parser.add_argument("--log-dir", type=Path,
-                        help="Write each figure's caption numbers to fig_<name>_log.txt in this directory")
     parser.add_argument("--recompute", action="store_true",
                         help="Recompute the pseudospike cache using JAX and spikegd")
     args = parser.parse_args(argv)
     for name in args.figures:
         if name not in FIGURES:
             parser.error(f"unknown figure {name!r}; choose from: {', '.join(FIGURES)}")
-    if args.log_dir is not None:
-        args.log_dir.mkdir(parents=True, exist_ok=True)
     for name in args.figures or FIGURES:
-        log = (args.log_dir / f"fig_{name}_log.txt").open("w") if args.log_dir is not None else None
-        with log if log is not None else nullcontext():
-            with redirect_stdout(log) if log is not None else nullcontext():
-                kwargs = {"recompute": args.recompute} if name == "pseudospike" else {}
-                FIGURES[name](args.output_dir, **kwargs)
+        kwargs = {"recompute": args.recompute} if name == "pseudospike" else {}
+        FIGURES[name](args.output_dir, **kwargs)
 
 
 if __name__ == "__main__":

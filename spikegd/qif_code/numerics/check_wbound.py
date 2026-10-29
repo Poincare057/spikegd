@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'figs'))
-from generate_figs import simulate, groups, PI
+from spikegd.qif_code.figs.generate_figs import simulate, groups, PI
 rng = np.random.default_rng(7)
 for (l, f, Delta, G) in [(1, 1, 0.0, np.inf), (2, 3, 0.02, 2.0), (4, 2, 0.05, 1.0), (3, 4, 0.1, 0.5)]:
     for k in [3, 8, 15]:

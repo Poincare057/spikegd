@@ -5,9 +5,10 @@ Three independent references are used:
   SGD   Klos & Memmesheimer's spikegd (JAX, float64): its own closed forms, and JAX autodiff through its event-based simulation;
   FD    central differences (h = 1e-6, float64) of whole simulated trials.
 The quantities under test are the paper's formulas transcribed in paper_forms.py, and gradients assembled only from them (rtrl_paper.py).
-Run: python3 fd_check_all.py   ->  FD_REPORT.md, fd_results.json
+Run: python3 fd_check_all.py   ->  ../RUN_RESULTS.md (tables, JSON records and execution log)
 """
 import json, time, sys, os
+from pathlib import Path
 import numpy as np, mpmath as mp
 from scipy.integrate import solve_ivp
 import jax, jax.numpy as jnp
@@ -18,6 +19,31 @@ from spikegd.qif_code.figs.generate_figs import qr_accumulate
 mp.mp.dps = 50
 rng = np.random.default_rng(2026)
 REC = []
+LOG = []
+
+
+def write_results(lines, records, log, output_path=None):
+    """Replace only the FD section in the shared results file on each run."""
+    if output_path is None:
+        output_path = Path(__file__).resolve().parents[1] / 'RUN_RESULTS.md'
+    start = '<!-- FD_RESULTS_START -->'
+    end = '<!-- FD_RESULTS_END -->'
+    section = '\n'.join([
+        start, *lines,
+        '### Machine-readable FD results', '', '```json',
+        json.dumps(records, indent=1), '```', '',
+        '### FD execution log', '', '```text', *log, '```', end,
+    ])
+    existing = output_path.read_text(encoding='utf-8') if output_path.exists() else ''
+    if start in existing and end in existing:
+        before, remainder = existing.split(start, 1)
+        _, after = remainder.split(end, 1)
+        result = before + section + after
+    else:
+        result = existing.rstrip() + '\n\n## Full gradient validation\n\n' + section + '\n'
+    output_path.write_text(result, encoding='utf-8')
+
+
 def record(section, check, paper, ref, ours, refv, tol, note='', rel_floor=1.0, allow_nonfinite=False, expected_fail=False):
     ours = np.atleast_1d(np.asarray(ours, float)); refv = np.atleast_1d(np.asarray(refv, float))
     ok_mask = np.isfinite(ours) & np.isfinite(refv)
@@ -26,7 +52,7 @@ def record(section, check, paper, ref, ours, refv, tol, note='', rel_floor=1.0, 
     r = dict(section=section, check=check, paper=paper, reference=ref, n=int(ok_mask.sum()), nonfinite=nonfinite,
              max_abs=float(err.max()) if err.size else float('nan'), max_rel=float(rel.max()) if rel.size else float('nan'),
              tol=tol, ok=bool(rel.size and rel.max() <= tol and (nonfinite == 0 or allow_nonfinite)), note=note, expected_fail=expected_fail)
-    REC.append(r); print(('PASS ' if r['ok'] else ('ERRATUM ' if expected_fail else 'FAIL ')) + f"[{section}] {check} vs {ref}: n={r['n']} max_rel={r['max_rel']:.2e} {note}")
+    REC.append(r); LOG.append(('PASS ' if r['ok'] else ('ERRATUM ' if expected_fail else 'FAIL ')) + f"[{section}] {check} vs {ref}: n={r['n']} max_rel={r['max_rel']:.2e} {note}")
     return r
 M = lambda x: mp.mpf(float(x))
 def mpd(fun, x):              # 50-digit derivative of a scalar function at x
@@ -417,9 +443,8 @@ record(S, 'd t_ps / d w: our trace at the trial end x closed-form gradient of sp
 
 # ------------------------------------------------------------------ report
 dt = time.time()-t0
-json.dump(REC, open('fd_results.json', 'w'), indent=1)
 n_ok = sum(r['ok'] for r in REC); n_err = sum((not r['ok']) and r['expected_fail'] for r in REC); n_fail = len(REC)-n_ok-n_err
-lines = ['# Finite-difference and cross-implementation check of theory_condensed.tex', '',
+lines = ['### Finite-difference and cross-implementation check of theory_condensed.tex', '',
          f'{n_ok} of {len(REC)} checks pass, {n_err} reproduce a known erratum in the paper, {n_fail} unexplained failures ({dt:.0f} s).',
          'Run `python3 fd_check_all.py` to reproduce.', '',
          'References: **MPFD** = derivative of the paper\'s value formula in 50-digit arithmetic (mpmath); **SGD** = Klos & Memmesheimer\'s',
@@ -428,10 +453,10 @@ lines = ['# Finite-difference and cross-implementation check of theory_condensed
          '(floor 1e-3 where noted). Tolerances are set by the reference: ~1e-10 for MPFD, ~1e-8 for spikegd (its reset is at -1/eps with',
          f'eps = {sg.EPS}), ~1e-5 for float64 FD of whole trials.', '']
 for sec in dict.fromkeys(r['section'] for r in REC):
-    lines += [f'## {sec}', '', '| check | paper | reference | n | max rel. err. | tol | result | note |', '|---|---|---|---|---|---|---|---|']
+    lines += [f'### {sec}', '', '| check | paper | reference | n | max rel. err. | tol | result | note |', '|---|---|---|---|---|---|---|---|']
     for r in REC:
         if r['section'] != sec: continue
         lines.append(f"| {r['check']} | {r['paper']} | {r['reference']} | {r['n']} | {r['max_rel']:.1e} | {r['tol']:.0e} | {'pass' if r['ok'] else ('**erratum**' if r['expected_fail'] else '**FAIL**')} | {r['note']} |")
     lines.append('')
-open('FD_REPORT.md', 'w').write('\n'.join(lines))
-print(f'\n{n_ok}/{len(REC)} pass, {n_err} errata, {n_fail} unexplained, {dt:.0f} s')
+LOG.append(f'{n_ok}/{len(REC)} pass, {n_err} errata, {n_fail} unexplained, {dt:.0f} s')
+write_results(lines, REC, LOG)
