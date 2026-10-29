@@ -9,13 +9,6 @@ qif_code/
   fdcheck/   full check of every closed form and gradient against 50-digit FD, spikegd (Klos & Memmesheimer) and FD of trials
 ```
 
-## Setup
-
-```bash
-pip install numpy scipy matplotlib mpmath "jax[cpu]" jaxtyping optax
-git clone https://github.com/chklos/spikegd && pip install -e spikegd --no-deps     # Klos & Memmesheimer's code
-```
-jax and spikegd are needed only for `fdcheck/` and for `figs/generate_figs.py pseudospike` when recomputing its cache.
 
 ## Run
 
@@ -33,7 +26,3 @@ cd fdcheck && python3 fd_check_all.py      # ~10 min; writes FD_REPORT.md and fd
 - `fdcheck/rtrl_paper.py` – exact gradients assembled only from those formulas (single neuron, R1, N-neuron network).
 - `fdcheck/sg.py` – float64 wrappers around spikegd.
 
-## Status of the last full check
-
-98 of 99 checks pass; the remaining one reproduces an erratum (∂V/∂b on the invariant line), now corrected in the paper. See
-`fdcheck/FD_REPORT.md`.
