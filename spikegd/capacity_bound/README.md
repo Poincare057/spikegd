@@ -11,7 +11,7 @@ From the repository root:
 
 ```bash
 python -m pip install -r requirements.txt
-cd spikegd/qif_code
+cd spikegd/capacity_bound
 ```
 
 ## Generate the figures

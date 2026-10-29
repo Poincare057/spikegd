@@ -30,7 +30,7 @@ The `experiments` folder contains scripts and notebooks to generate the main res
 For instructions on the additional code, see:
 
 - [Local learning rules README](experiments/rnn/local_rules_code/README.md)
-- [QIF code README](spikegd/qif_code/README.md)
+- [QIF code README](spikegd/capacity_bound/README.md)
 
 ## Citation
 

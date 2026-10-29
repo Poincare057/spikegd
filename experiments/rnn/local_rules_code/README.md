@@ -37,13 +37,13 @@ coefficients;
 `plot.py` draws the figures. 
 
 `fastgrad.py`
-implements the local and fitted eligibility traces, using the shared task in
-`../rnn.py`.
+implements the local and fitted eligibility traces, using the same task as in
+our paper section 2.
 
 The task uses seed 7, trial duration 10, two target neurons, and input weights
-+5 and -5 at rate 1. Training uses AdaBelief with exponentially decaying learning
++5 and -5 at rate input 1. Training uses AdaBelief with exponentially decaying learning
 rate and input spike-time jitter of standard deviation 0, 0.05, or 0.2.
-The zero-jitter run is deterministic and copied across seeds. Floating-point
+The zero-jitter run is deterministic and the inputs are copied across seeds. Floating-point
 and JAX-version differences can change individual training trajectories.
 
 Results go to `output/data/`; figures go to `output/figs/`:
