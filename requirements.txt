@@ -1,0 +1,12 @@
+# Install spikegd and its core dependencies declared in pyproject.toml
+# (JAX, jaxtyping, Optax, Matplotlib, tqdm, Jupyter, and ipykernel).
+-e .
+
+# Additional imports used by the experiment and numerical-check scripts.
+numpy
+scipy
+mpmath
+
+# Dataset loading for the MNIST experiments.
+torch
+torchvision

@@ -15,7 +15,7 @@ We use event-based spiking neural network simulations, iterating over input and 
 3. Install the package and the dependencies necessary to use it or to run most of the experiments via
 
       ```bash
-      pip install -e .
+   python -m pip install -r requirements.txt
       ```
 
 4. For the MNIST experiments, you need to additionally [install](https://pytorch.org/get-started/locally/) PyTorch (cpu-only is sufficient) and TorchVision to load the dataset.
@@ -25,6 +25,12 @@ We use event-based spiking neural network simulations, iterating over input and 
 The neuron models including methods to simulate networks of them and to compute pseudospike times are located in `spikegd`. Abstract base classes, i.e. templates for neuron models, are given in `models.py`. Specific implementations of a few neuron models are provided in the other files in the same directory.
 
 The `experiments` folder contains scripts and notebooks to generate the main results of the paper. They can also serve as a starting point to implement new experiments.
+
+## New Code
+For instructions on the additional code, see:
+
+- [Local learning rules README](experiments/rnn/local_rules_code/README.md)
+- [QIF code README](spikegd/qif_code/README.md)
 
 ## Citation
 
@@ -40,3 +46,14 @@ If you use this code in your research, please cite our arXiv paper:
       primaryClass={q-bio.NC}
 }
 ```
+
+## AI Disclaimer
+During the preparation of this work, the authors used AI for language editing and AI for assistance with basic code generation, cleanup, and readme editing. AI generated no experimental observations.
+
+All code work is based on the theory from the paper and was hand written. AI was only used in the final polishing of the code and readmes. 
+
+Additionally all theoretical derivations/ approaches / directions were hand-derived before an LLM was used to typset into code and polish. If you decide to embark on this journey and find errors please do contact us!!
+
+We will be happy to make corrections from your feedback rather than use an LLM for verification. The authors are responsible for verifying the formulations, code, citations, and final content before submission. 
+
+All ideas and formulations originate from the authors.
